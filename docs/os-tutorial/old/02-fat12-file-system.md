@@ -1,14 +1,16 @@
 前面我们花了极大的篇幅来写一个极简引导扇区的实现，但是本节相比之下就要短很多了，我们要在我们的软盘中创建 FAT12 文件系统，这样后续我们写入 `Loader` 和 `Kernel` 就要方便很多了。
 
-引导扇区中加入 `FAT12` 文件系统头，
+一个磁盘中有没有文件系统，是依靠什么来进行标识的呢？一般而言，每一个文件系统都有特定的一个结构用来描述自己，无论是 ext2 的 metadata 块，还是 FAT12/16/32 在引导扇区中加入的 BPB，都是一种对文件系统的标识。
 
-`FAT12` 文件系统的具体结构如下图所示（实在懒得打列表了，干脆搬了一张网图）：
+BPB 的具体结构如下图所示（实在懒得打列表了，干脆搬了一张网图）：
 
 ![](images/fat12.webp)
 
-（图 2-1 `FAT12` 文件系统头的结构）
+（图 2-1 BPB 的结构）
 
-如诸位所见，`FAT12` 文件系统头占用了汇编程序开头的 64 个字节。注意，对于 `org` 指令来说，它**并不在所编译得出的机器码之列**，因此被称为**伪指令**。
+如诸位所见，`FAT12` 文件系统头占用了汇编程序开头的 64 个字节。这下可用的空间又少了 64 字节（泪目）
+
+不过它也带给我们一个好处，一般的 FAT 实现都认为只要有 BPB 就是有 FAT 文件系统（有的实现甚至不会管 BPB），这样就可以用一些工具来方便地操作磁盘了。
 
 那么我们就依照此结构写入一下这些结构吧：
 
@@ -19,7 +21,7 @@
     jmp short LABEL_START
     nop ; BS_JMPBoot 由于要三个字节而jmp到LABEL_START只有两个字节 所以加一个nop
 
-    BS_OEMName     db 'tutorial'    ; 固定的8个字节
+    BS_OEMName     db 'tutorial'    ; 8个字节，内容随意
     BPB_BytsPerSec dw 512           ; 每扇区固定512个字节
     BPB_SecPerClus db 1             ; 每簇固定1个扇区
     BPB_RsvdSecCnt dw 1             ; MBR固定占用1个扇区
@@ -31,12 +33,12 @@
     BPB_SecPerTrk  dw 18            ; 每磁道扇区数，固定为18
     BPB_NumHeads   dw 2             ; 磁头数，bximage 的输出告诉我们是2个
     BPB_HiddSec    dd 0             ; 隐藏扇区数，没有
-    BPB_TotSec32   dd 0             ; 若之前的 BPB_TotSec16 处没有记录扇区数，则由此记录，如果记录了，这里直接置0即可
-    BS_DrvNum      db 0             ; int 13h 调用时所读取的驱动器号，由于只挂在一个软盘所以是0 
+    BPB_TotSec32   dd 0             ; 若之前的 BPB_TotSec16 处没有记录扇区数，则由此地址记录，如果记录了，这里直接置0即可
+    BS_DrvNum      db 0             ; int 13h 调用时所读取的驱动器号，由于只有一个软盘所以是0 
     BS_Reserved1   db 0             ; 未使用，预留
-    BS_BootSig     db 29h           ; 扩展引导标记
+    BS_BootSig     db 29h           ; 扩展引导标记，固定为 0x29
     BS_VolID       dd 0             ; 卷序列号，由于只挂载一个软盘所以为0
-    BS_VolLab      db 'OS-tutorial' ; 卷标，11个字节
+    BS_VolLab      db 'OS-tutorial' ; 卷标，11个字节，内容随意
     BS_FileSysType db 'FAT12   '    ; 由于是 FAT12 文件系统，所以写入 FAT12 后补齐8个字节
 
 LABEL_START: ; 后面就是正常的引导代码
