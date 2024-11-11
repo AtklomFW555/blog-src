@@ -1,7 +1,7 @@
 nav:
     - 00 开始之前: 00-beforestart.md
     - 01 第一个引导扇区: 01-first-boot-sector.md
-    - 02 FAT12 文件系统: 02-fat12-file-system.md
+    - 02 创建 FAT12 文件系统: 02-fat12-file-system.md
     - 03 查找 Loader: 03-find-loader.md
     - 04 加载并跳入 Loader: 04-load-and-jump-into-loader.md
     - 05 读取内核并进入保护模式: 05-read-kernel-and-into-32.md
