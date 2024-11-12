@@ -3,6 +3,7 @@
 本节先来处理上一节的历史遗留问题，上一节给我们留下了一个巨大的烂摊子：
 
 > 系统调用中有关应用程序基址偏移的部分需要对不同的系统调用具体问题具体分析，这意味着把那个优美的系统调用表拆成一坨屎一样的 switch-case。
+>
 > 执行应用程序还没有集成到 shell。事实上这个功能看上去容易，其实也略有复杂，还有两个系统调用（`waitpid` 和 `exit`）没有实现。
 
 单是解决这两个问题可能就要耗去一半的篇幅了，留给我们的时间不多了呀。
@@ -521,3 +522,69 @@ int main()
 
 不知道看见这样的程序勾起了你什么回忆呢，总之我是有种回到了刚学 C 语言时的感觉……不煽情了，现在仔细回顾一下这个程序，有什么问题吗？
 
+看似完美无缺，实际上问题非常严重。或许你曾对 `main` 函数的返回值谁来接收有疑问，当时的回答是操作系统。现在我们就是操作系统，那这个 `main` 的返回值，是不是也得接收一下？
+
+况且在第五节中提过，ELF 程序的真正入口并不是 `main`，而是 `_start`，`main` 只是一个普通的函数而已。因此，我们需要定义一个 `_start`。
+
+这个 `_start` 还是相当好写的，让应用程序接收参数是下一节的话题，不考虑参数的话，只需要调用 `main`，然后用 `exit` 结束应用程序即可：
+
+**代码 23-21 简单的入口点（apps/start.c）**
+```c
+int main();
+
+void _start()
+{
+    exit(main());
+}
+```
+
+接下来怎么编译呢？直接 `gcc`？那可不行，我们的“标准库”和 Linux 还是不一样的，得链接上我们的标准库才行。
+
+对 Makefile 这么修改一下：
+
+**代码 23-22 新的 Makefile（Makefile）**
+```makefile
+LIBC_OBJECTS = out/syscall_impl.o out/stdio.o out/string.o
+
+out/%.bin : apps/%.asm
+	nasm apps/$*.asm -o out/$*.o -f elf
+	i686-elf-ld -s -Ttext 0x0 -o out/$*.bin out/$*.o
+
+out/tulibc.a : $(LIBC_OBJECTS)
+	i686-elf-ar rcs out/tulibc.a $(LIBC_OBJECTS)
+
+out/%.bin : apps/%.c apps/start.c out/tulibc.a
+	i686-elf-gcc -c -I include apps/start.c -o out/start.o -fno-builtin
+	i686-elf-gcc -c -I include apps/$*.c -o out/$*.o -fno-builtin
+	i686-elf-ld -s -Ttext 0x0 -o out/$*.bin out/$*.o out/start.o out/tulibc.a
+```
+
+这里先用了 `ar`，把我们的“标准库”——`stdio.o`（`printf`，`sprintf`，`vprintf`，`vsprintf`）、`string.o`（`mem` 系列和 `str` 系列）以及 `syscall_impl.o`（系统调用的实现部分）打成了一个库 `tulibc.a`，取 `TUtorialos LIBC` 的意思。`libc` 则是一种描述标准库的通用简写。然后，分别编译 `start.c` 和应用程序，最后把应用程序本体、`start.o` 和 `tulibc.a` 链接在一起，并设定入口点，形成可以让 TutorialOS 执行的应用程序。
+
+当然，我们也是支持用汇编来编写应用程序的，这个流程就比较简洁，因为没有 `main` 的特殊包袱，直接编译链接即可。
+
+下面编译硬盘映像的部分，我们也做了修改。
+
+**代码 23-23 新的 Makefile（续）（Makefile）**
+```makefile
+APPS = out/test_c.bin
+
+# 中略
+
+hd.img : out/boot.bin out/loader.bin out/kernel.bin $(APPS)
+	ftimgcreate hd.img -t hd -size 80
+	ftformat hd.img -t hd -f fat16
+	ftcopy out/loader.bin -to -img hd.img
+	ftcopy out/kernel.bin -to -img hd.img
+	ftcopy out/test_c.bin -to -img hd.img
+	dd if=out/boot.bin of=hd.img bs=512 count=1
+```
+
+在 `what you need` 的部分，我们新添加了一个 `APPS` 变量，它代表我们需要编译的所有应用，目前只有一个 `test_c.bin`。编译出来以后，我们在下面的命令中进行写入。
+
+现在应该就可以开始运行了。编译，运行，效果如下：
+
+![](images/graph-23-3.png)
+（图 23-3 Hello, World!）
+
+这一节实在是太长了，到此为止吧。下一节我们来支持 `malloc`，同时为应用程序传参，然后就可以正式结束啦！提前完结撒花.jpg
