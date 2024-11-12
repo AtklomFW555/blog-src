@@ -119,7 +119,7 @@ task_t *task_alloc()
         if (taskctl->tasks0[i].flags == 0) {
             task = &taskctl->tasks0[i];
             task->flags = 1;
-            task->tss.eflags = 0x00000202;
+            task->tss.eflags = 0x00000202; // 打开中断
             task->tss.eax = task->tss.ecx = task->tss.edx = task->tss.ebx = 0;
             task->tss.ebp = task->tss.esi = task->tss.edi = 0;
             task->tss.es = task->tss.ds = task->tss.fs = task->tss.gs = 0;
@@ -131,6 +131,8 @@ task_t *task_alloc()
     return NULL;
 }
 ```
+
+`eflags` 的这个数值表示新任务默认开启中断。`iomap` 本意是让应用程序能够执行 `in/out` 指令所设置，但我们不需要让它执行这些指令，否则到时候执行个应用程序，键盘也不发信号了，时钟也不响了，就连电脑都重启了，所以把它设置成 `0x40000000`（事实上只要大于等于 103 就可以）表示：当作为应用程序时，不需要执行 `in/out` 指令。至于 CPU 怎么判断你是不是一个应用程序，第 22 节再说。
 
 接下来是 `task_run`，使一个任务开始运行。实际上只是把这个任务加入了 `tasks` 数组而已。
 
@@ -146,7 +148,7 @@ void task_run(task_t *task)
 
 接下来是 `task_switch`，真正执行任务切换的部分。不过，我们好像还没有具体讲究竟是怎么任务切换的，我们现在来简单说一下。
 
-其实非常简单，只需要用 `farjmp` 就可以了。当执行一个远跳转时，CPU 会检查对应的段是否是代码段，如果不是，就退而求其次检查是不是 TSS。如果是 TSS，就会自动读取 TSS 中的全部寄存器，这之中包括下一步执行哪里的 `eip`，从而恢复断点，继续执行。
+其实非常简单，只需要用 `farjmp` 就可以了。当执行一个远跳转（就是我们之前用过的 `jmp xxx:xxx`）时，CPU 会检查对应的段是否是代码段，如果不是，就退而求其次检查是不是 TSS。如果是 TSS，就会先把当前任务的全部寄存器存到它的 TSS 里，然后自动读取 TSS 中的全部寄存器，这之中包括下一步执行哪里的 `eip`，从而恢复断点，继续执行。
 
 **代码 12-8 `farjmp`（lib/nasmfunc.asm）**
 ```asm
@@ -156,7 +158,9 @@ farjmp:
     ret
 ```
 
-在实际运用中，应在 C 中如此调用：`farjmp(eip, cs)`。`eip` 为下一步执行哪里的寄存器，如果跳的是 TSS，那就必须写 0；cs 为跳入的代码段，在这里是 TSS。
+在实际运用中，应在 C 中如此调用：`farjmp(eip, cs)`。`eip` 为下一步执行哪里的寄存器，如果跳的是 TSS，那就必须写 0；cs 为跳入的代码段选择子，在这里是 TSS。
+
+为什么一定要这样呢？这和我们使用了 `jmp far [addr]` 来进行远跳转有关。你只需要知道，在这种情况下，`[addr]` 的位置必须写 EIP，`[addr + 4]` 的位置必须写 cs。
 
 这样一来，`task_switch` 就十分简单了。
 
