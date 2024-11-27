@@ -505,7 +505,7 @@ void app_entry(const char *app_name, const char *cmdline, const char *work_dir)
 }
 ```
 
-坑比 intel 在访问 [esp + xxx] 的地址时用的是 ds，ss 完全成了摆设，所以栈和数据必须放在一个段里，于是就炸了（重复一遍）。
+坑比 intel 在访问 [esp + xxx] 的地址时用的是 ds，ss 完全成了摆设，所以栈和数据必须放在一个段里，于是就炸了（重复一遍）。当栈无限制扩张时会直接侵占数据甚至是代码，从而造成安全隐患。我目前没有什么解决的办法，但是理论上可以检测到这样的错误甚至攻击。
 
 现在已经可以执行 ELF 了，我们就写一个 C 应用作为测试吧。新建 apps 文件夹，我们就写一个最简单的 Hello World：
 
