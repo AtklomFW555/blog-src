@@ -215,3 +215,351 @@ void kernel_main() // kernel.asm会跳转到这里
 （图 24-1 效果）
 
 执行内部命令还是应用程序都没问题，不过按理来说也算理所应当吧，到最后也没做多少修改（笑）。
+
+热身完成，筋骨也活动得差不多了，也该回顾一下上一节的两大目标：实现 `malloc` 以及给应用程序传参。
+
+说到底，这其实是同一个问题：如果应用程序能直接访问操作系统的内存不就好了？这样可以直接使用 `kmalloc`、`kfree`，传参随便写个系统调用也就可以做到了。可是应用程序只能访问应用程序段自己的地址，这是出于安全的考虑：如果应用程序能访问操作系统的内存，那不就能随便破坏了吗。
+
+所以，现在的问题就变成了：要由操作系统提供一段位于应用程序数据段内的内存，接下来就可以让应用程序自治，通过系统调用等等手段从这里获取内存。
+
+对 C 语言有些了解的读者应该知道，`malloc` 实际上是从一个叫“堆”的地方获取内存的；它并不是直接的系统调用，真正用于向操作系统申请内存的系统调用是 `brk`、 `sbrk` 和 `mmap`。`mmap` 的本意是将文件内容映射到内存当中，与普通的读取不同的是，对映射后内存的修改会立刻同步到文件；而通过使用一些特殊文件，就可以实现凭空申请内存的效果。
+
+然而，实现一个 `mmap` 对我们来说太过困难，准备一个特殊文件也不在现有的框架之内，因此就算了。接下来的 `brk` 和 `sbrk`，一看名字就知道是一对函数，查阅 linux manual 知道它们操控着一个叫做 `program break` 的玩意。手册上说它是什么数据段的终止，这是什么不知道；不过使用这两个函数可以修改这个位置，从而给数据段里凭空多出内存来，这就是为我们所用的内存了。
+
+`brk` 是直接设置 `program break`，我还得自己维护上一个位置才能申请，相比之下，还是直接使用 `sbrk` 更加直接，它的参数是增量，返回的是旧的 `program break` 的位置，原型如下：
+
+```c
+void *sbrk(int incr);
+```
+
+和 `malloc` 一对比，是不是看着很接近？更棒的是，`incr` 还可以是负数，相当于在释放用完的内存；也就是说，用 `sbrk` 一个函数就可以实现内存的分配和释放，接下来就只是管理的事了。
+
+那么我们最终的问题，就变成了两个：
+
+1) 如何实现 `sbrk`；
+
+2) 如何通过 `sbrk` 实现 `malloc`。
+
+先从第一个开始吧。既然所谓的 `program break` 表示数据段的终止，我们先来实现一个可以用来扩张数据段的函数。不过说是扩张，到头来其实也还是删掉旧的创建新的。
+
+内核的数据段已经占满了 4GB，给内核实现扩张毫无意义。因此，我们给任务添加一个 `is_user` 标签，表示是不是应用程序：
+
+**代码 24-4 添加新标签（include/mtask.h、kernel/mtask.c、kernel/exec.c）**
+```c
+typedef struct TASK {
+    uint32_t sel;
+    int32_t flags;
+    exit_retval_t my_retval;
+    int fd_table[MAX_FILE_OPEN_PER_TASK];
+    gdt_entry_t ldt[2];
+    int ds_base;
+    bool is_user; // here
+    tss32_t tss;
+} task_t;
+```
+```c
+            for (int i = 3; i < MAX_FILE_OPEN_PER_TASK; i++) {
+                task->fd_table[i] = -1;
+            }
+            task->is_user = false; // here
+            return task;
+```
+```c
+void app_entry(const char *app_name, const char *cmdline, const char *work_dir)
+{
+    int fd = sys_open((char *) app_name, O_RDONLY);
+    int size = sys_lseek(fd, -1, SEEK_END) + 1;
+    sys_lseek(fd, 0, SEEK_SET);
+    char *buf = (char *) kmalloc(size + 5);
+    sys_read(fd, buf, size);
+    int first, last;
+    char *code;
+    int entry = load_elf((Elf32_Ehdr *) buf, &code, &first, &last);
+    if (entry == -1) task_exit(-1);
+    char *ds = (char *) kmalloc(last - first + 4 * 1024 * 1024 + 5);
+    memcpy(ds, code, last - first);
+    task_now()->is_user = true; // here
+    task_now()->ds_base = (int) ds;
+    ldt_set_gate(0, (int) code, last - first - 1, 0x409a | 0x60);
+    ldt_set_gate(1, (int) ds, last - first + 4 * 1024 * 1024 + 1 * 1024 * 1024 - 1, 0x4092 | 0x60);
+    start_app(entry, 0 * 8 + 4, last - first + 4 * 1024 * 1024 - 4, 1 * 8 + 4, &(task_now()->tss.esp0));
+    while (1);
+}
+```
+
+接下来就可以实现给用户扩张数据段的函数了：
+
+**代码 24-5 扩张数据段（kernel/exec.c）**
+```c
+static void expand_user_segment(int increment)
+{
+    task_t *task = task_now();
+    if (!task->is_user) return; // 内核都打满4GB了还需要扩容？
+    gdt_entry_t *segment = &task->ldt[1];
+    // 接下来把base和limit的石块拼出来
+    uint32_t base = segment->base_low | (segment->base_mid << 16) | (segment->base_high << 24); // 其实可以不用拼直接用ds_base 但还是拼一下吧当练习
+    uint32_t size = segment->limit_low | ((segment->limit_high & 0x0F) << 16);
+    if (segment->limit_high & 0x80) size *= 0x1000;
+    size++;
+    // 分配新的内存
+    void *new_base = (void *) kmalloc(size + increment + 5);
+    if (increment > 0) return; // expand是扩容你缩水是几个意思
+    memcpy(new_base, (void *) base, size); // 原来的内容全复制进去
+    // 用户进程的base必然由malloc分配，故用free释放之
+    kfree((void *) base);
+    // 那么接下来就是把new_base设置成新的段了
+    ldt_set_gate(1, (int) new_base, size + increment - 1, 0x4092 | 0x60); // 反正只有数据段允许扩容我也就设置成数据段算了
+    task->ds_base = (int) new_base; // 既然ds_base变了task里的应该同步更新
+}
+```
+
+开头三行显然不需要解释。接下来把应用程序数据段的基址（这样我才知道从哪拿到旧数据）和大小（这样我才知道新的需要多大）拼出来。死去的 GDT 又开始攻击我们了，偷一个小图过来：
+
+![](images/graph-5-3.png)
+
+（图 24-2 `GDT` 描述符结构）
+
+以及它的代码表示：
+
+```c
+struct gdt_entry_struct {
+    uint16_t limit_low; // BYTE 0~1
+    uint16_t base_low; // BYTE 2~3
+    uint8_t base_mid; // BYTE 4
+    uint8_t access_right; // BYTE 5, P|DPL|S|TYPE (1|2|1|4)
+    uint8_t limit_high; // BYTE 6, G|D/B|0|AVL|limit_high (1|1|1|1|4)
+    uint8_t base_high; // BYTE 7
+} __attribute__((packed));
+
+typedef struct gdt_entry_struct gdt_entry_t;
+```
+
+按照这个结构再去看上面的代码，拼 `base` 是显而易见的，拼 `limit` 则涉及到一个 G 位的问题：G 位位于 `limit_high` 的最高位，当它为 1 时，代表整个 `limit` 代表的是一个以 4KB 为单位的段（说白了就是要给 `limit` 乘上 4096）。拼完以后由于 `limit` 加 1 才是 `size`，所以再把 `1` 给加上。
+
+接下来重新分配一段新的数据段，把旧的东西全都复制过去，唯一的变化就是大小变大了。旧的数据段留着也没有用，既然前面初始化是用 `kmalloc` 初始化的 `ds`，新的段也使用 `kmalloc` 分配，所以可以安全地使用 `kfree` 把内存释放掉。最后调用 `ldt_set_gate` 把数据段换成新的，同时更新 `task` 里的 `ds_base`，这样如假包换，应用程序毫无感知。
+
+接下来就是实现 `sbrk` 了。上面的 `program break` 说是数据段结尾，但如果老是更新数据段的话，内存也吃不消，速度也会慢上一点（不过不仔细看的话，大概是看不出来的）。所以我们先临时开 1MB 缓冲区，这 1MB 用完了再扩展至少 32KB，这样也许会把占用搞小一点（心虚）。
+
+因此，存 `program break` 不仅要存它现在的位置，还要存给它的缓冲区在哪里结束，这样才可以扩展数据段。
+
+**代码 24-6 实现 `sbrk`（1）——创建 `program break`（include/mtask.h）**
+```c
+typedef struct TASK {
+    uint32_t sel;
+    int32_t flags;
+    exit_retval_t my_retval;
+    int fd_table[MAX_FILE_OPEN_PER_TASK];
+    gdt_entry_t ldt[2];
+    int ds_base;
+    bool is_user;
+    void *brk_start, *brk_end; // here
+    tss32_t tss;
+} task_t;
+```
+
+接下来在 `app_entry` 中初始化它：
+
+**代码 24-7 实现 `sbrk`（2）——初始化 `program break`（kernel/exec.c）**
+```c
+void app_entry(const char *app_name, const char *cmdline, const char *work_dir)
+{
+    int fd = sys_open((char *) app_name, O_RDONLY);
+    int size = sys_lseek(fd, -1, SEEK_END) + 1;
+    sys_lseek(fd, 0, SEEK_SET);
+    char *buf = (char *) kmalloc(size + 5);
+    sys_read(fd, buf, size);
+    int first, last;
+    char *code;
+    int entry = load_elf((Elf32_Ehdr *) buf, &code, &first, &last);
+    if (entry == -1) task_exit(-1);
+    char *ds = (char *) kmalloc(last - first + 4 * 1024 * 1024 + 1 * 1024 * 1024 - 5);
+    memcpy(ds, code, last - first);
+    task_now()->is_user = true;
+    // 这一块就是给用户用的
+    task_now()->brk_start = (void *) last - first + 4 * 1024 * 1024;
+    task_now()->brk_end = (void *) last - first + 5 * 1024 * 1024 - 1;
+    task_now()->ds_base = (int) ds; // 设置ds基址
+    ldt_set_gate(0, (int) code, last - first - 1, 0x409a | 0x60);
+    ldt_set_gate(1, (int) ds, last - first + 4 * 1024 * 1024 + 1 * 1024 * 1024 - 1, 0x4092 | 0x60);
+    start_app(entry, 0 * 8 + 4, last - first + 4 * 1024 * 1024 - 4, 1 * 8 + 4, &(task_now()->tss.esp0));
+    while (1);
+}
+```
+
+最后就是 `sbrk` 的本体了，为了偷懒也放在了 `kernel/exec.c` 下面（虽然放这里好像不大好？）：
+
+**代码 24-8 实现 `sbrk`（3）——操控 `program break`（kernel/exec.c）**
+```c
+void *sys_sbrk(int incr)
+{
+    task_t *task = task_now();
+    if (task->is_user) { // 是应用程序
+        if (task->brk_start + incr > task->brk_end) { // 如果超出已有缓冲区
+            expand_user_segment(incr + 32 * 1024); // 再多扩展32KB
+            task->brk_end += incr + 32 * 1024; // 由于扩展了32KB，同步将brk_end移到现在的数据段结尾
+        }
+        void *ret = task->brk_start; // 旧的program break
+        task->brk_start += incr; // 直接添加就完事了
+        return ret; // 返回之
+    }
+    return NULL; // 非用户不允许使用sbrk
+}
+```
+
+到现在为止，就实现了最基本的向内核申请内存的函数。接下来把它搞成一个系统调用，`sbrk` 就可以使用了：
+
+**代码 24-9 实现 `sbrk`（4）——添加系统调用（include/syscall.h、kernel/syscall.c、kernel/syscall_impl.asm）**
+```c
+#ifndef _SYSCALL_H_
+#define _SYSCALL_H_
+// 上略...
+// exec.c
+void *sys_sbrk(int incr);
+
+#endif
+```
+```c
+    switch (eax) {
+        // 上略...
+        case 10:
+            ret = (int) sys_sbrk(ebx);
+            break;
+    }
+    // 下略...
+```
+```asm
+[global sbrk]
+sbrk:
+    push ebx
+    mov eax, 10
+    mov ebx, [esp + 8]
+    int 80h
+    pop ebx
+    ret
+```
+
+加了十个系统调用了，相信大家也应该大致熟悉了添加系统调用的流程了吧：首先实现系统调用本身，然后在 `syscall.c` 的 `switch-case` 里新加一个分支，最后用汇编仿照格式写一个实现，没有参数（getpid）、一个参数（一堆不列举）、两个参数（open）、三个参数（一堆不列举）的系统调用目前都有了。
+
+下面执行第二步，用 `sbrk` 实现 `malloc`。这个网上教程有一大堆，你干脆直接移植 `ptmalloc` 都行，这里我选择了一种最简单但同时大概也是最不稳定 ??跑在 CoolPotOS 上成功造成了 114514 次异常?? 的一种。 
+
+新建 `lib/malloc.c`，这就是我们 `malloc` 的实现。
+
+我们的堆实质上是一块一块的内存碎片，这些碎片采用链表的方式来组织，以下是每一个链表的节点：
+
+**代码 24-10 串联可用内存的链表节点（lib/malloc.c）**
+```c
+#include <unistd.h>
+#include <stddef.h>
+
+typedef char ALIGN[16];
+
+typedef union header {
+    struct {
+        uint32_t size;
+        uint32_t is_free;
+        union header *next;
+    } s;
+    ALIGN stub;
+} header_t;
+
+static header_t *head, *tail;
+```
+
+`ALIGN` 纯粹是用来对齐的类型，据传给搞成 16 字节对齐的地址能够使 CPU 更高效。里面的 `s` 成员才是会真正用到的部分，三个成员干什么的一看就明白：`size` 是碎片大小，`is_free` 是可用与否，`next` 是下一个节点。
+
+接下来我们来找一个能够盛下待分配内存的节点。这个过程很简单，顺着链表找下去就完了。
+
+**代码 24-11 寻找能盛下待分配内存的节点（lib/malloc.c）**
+```c
+// 寻找一个符合条件的指定大小的空闲内存块
+static header_t *get_free_block(uint32_t size)
+{
+    header_t *curr = head; // 从头开始
+    while (curr) {
+        if (curr->s.is_free && curr->s.size >= size) return curr; // 空闲，并且大小也满足条件，直接返回
+        curr = curr->s.next; // 下一位
+    }
+    return NULL; // 找不到
+}
+```
+
+然后就可以开始实现 `malloc` 了。先把代码放在这里，后面再慢慢解说。
+
+**代码 24-12 实现 `malloc`（lib/malloc.c）**
+```c
+void *malloc(uint32_t size)
+{
+    uint32_t total_size;
+    void *block;
+    header_t *header;
+    if (!size) return NULL; // size == 0，自然不用返回
+    header = get_free_block(size);
+    if (header) { // 找到了对应的header！
+        header->s.is_free = 0;
+        return (void *) (header + 1);
+        // header + 1，相当于把header的值在指针上后移了一个header_t，从而在返回的内存中不存在覆写header的现象
+    }
+    // 否则，申请内存
+    total_size = sizeof(header_t) + size; // 需要一处放header的空间
+    block = sbrk(total_size); // sbrk，申请total_size大小内存
+    if (block == (void *) -1) return NULL; // 没有足够的内存，返回NULL
+    // 申请成功！
+    header = block; // 初始化header
+    header->s.size = size;
+    header->s.is_free = 0;
+    header->s.next = NULL;
+    if (!head) head = header; // 第一个还是空的，直接设为header
+    if (tail) tail->s.next = header; // 有最后一个，把最后一个的next指向header
+    tail = header; // header荣登最后一个
+    return (void *) (header + 1); // 同上
+}
+```
+
+前三行声明变量不用管，紧接着当 `size` 为 0 时自然无需分配，返回 NULL 即可。接下来寻找可用的节点，如果找到了，则直接暴力占用这个节点，同时返回 `header + 1` 这个位置。这个位置是干什么的，想必不用啰嗦。
+
+接下来讨论没找到的情况，这时再去找操作系统使用 `sbrk` 申请内存。由于使用了 `header + 1`，内存块的开头应该是一个 `header_t`，要给加上这一片内存。
+
+接下来 `if (block == (void *) -1)` 是在干什么呢？按照标准规定，当 `sbrk` 失败时应当返回 -1，但我们的 `sbrk` 不会失败，就导致这一行没有用了。
+
+然后就是把这个内存块初始化，连到链表里并返回。由于只能直接知道链表末尾的位置，把它串联到末尾。最后返回 `header + 1` 跳过刚刚构造的 `header_t` 结构。
+
+`malloc` 完了，紧接着实现 `free`，基本上差不多简单：
+
+**代码 24-13 实现 `free`（lib/malloc.c）**
+```c
+void free(void *block)
+{
+    header_t *header, *tmp;
+    if (!block) return; // free(NULL)，有什么用捏
+    header = (header_t *) block - 1; // 减去一个header_t的大小，刚好指向header_t
+
+    if ((char *) block + header->s.size == sbrk(0)) { // 正好在堆末尾
+        if (head == tail) head = tail = NULL; // 只有一个内存块，全部清空
+        else {
+            // 遍历整个内存块链表，找到对应的内存块，并把它从链表中删除
+            tmp = head;
+            while (tmp) {
+                // 如果内存在堆末尾，那这个块肯定也在链表末尾
+                if (tmp->s.next == tail) { // 下一个就是原本末尾
+                    tmp->s.next = NULL; // 踢掉
+                    tail = tmp; // 末尾位置顶替
+                }
+                tmp = tmp->s.next; // 下一个
+            }
+        }
+        // 释放这一块内存
+        sbrk(0 - sizeof(header_t) - header->s.size);
+        return;
+    }
+    // 否则，设置为free
+    header->s.is_free = 1;
+}
+```
+
+首先判断 `block` 是不是 NULL，然后把 `block` 减去一个 `header` 的大小，拿到对应的 `header`。如果这个块正好在堆末尾，那就涉及到把这段内存归还给操作系统的事情；否则，直接把属性设置成 `free` 就可以为前面的 `get_free_block` 所用。
+
+中间的大 `if` 就是在向操作系统归还内存，首先判断能不能归还，只要当前的这个内存正好抵着现在的 `program break`，那就可以把这段内存归还。首先判断是不是只有这一个内存块，如果是的话直接清空整个链表即可；否则，由于链表中的内存块按分配先后顺序排列，那么在堆末尾的内存块，一定也在链表末尾。所以，这里直接遍历整个链表，在即将到达末尾的时候把末尾内存块踢出链表，并同时更新现在的末尾位置。最后，就可以释放掉这个内存块对应大小的内存，以及这个内存块本身占据的内存。以免你忘了，`sbrk` 可以使用正数分配、负数释放。而使用 `sbrk(0)`，则相当于返回现在的 `program break`，因为它的行为相当于给原 `program break` 加 0 再返回旧的。
+
+好了，一个简单的 `malloc/free` 就已经实现了，居然连 100 行都不到，应该很简单吧。
+
+有了 `malloc` 打底（事实上有 `sbrk` 就够了），给应用程序传参也就不是什么难事，`malloc` 就等着写完应用程序传参再测吧。
