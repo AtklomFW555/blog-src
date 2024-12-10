@@ -666,7 +666,7 @@ hd.img : out/boot.bin out/loader.bin out/kernel.bin $(APPS)
 
 现在终于可以编译运行，效果应如下图：
 
-![](images/graph-23-3.png)
+![](images/graph-24-2.png)
 （图 24-2 来自 c4 的 Hello, World!）
 
 首先执行了编译的原生 `test_c`，然后用 `c4` 执行源代码 `test_c.c`，都没有问题；后来又先用 `c4` 自己运行自己 `c4.c`，然后再执行 `test_c.c`，再往下甚至又多套了一层，也是毫无问题。当然了，执行速度肯定是顺次往下越来越慢。`c4` 里也用到了 `malloc`，一石二鸟，这说明我们做的工作都成功了！
