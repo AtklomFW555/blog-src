@@ -563,3 +563,135 @@ void free(void *block)
 好了，一个简单的 `malloc/free` 就已经实现了，居然连 100 行都不到，应该很简单吧。
 
 有了 `malloc` 打底（事实上有 `sbrk` 就够了），给应用程序传参也就不是什么难事，`malloc` 就等着写完应用程序传参再测吧。
+
+既然给应用程序传参是通过函数的参数，我们就操作新应用程序的栈。或许有人就要问了：
+
+> 既然 shell 里解析出了 argc 和 argv，为什么不直接传，反而传的是 cmdline 呢？
+
+这是因为，`argc` 固然好传，但 `argv` 并不好传。相比之下 `cmdline` 好传得多，只需要分配一块内存，把 `cmdline` 复制进去，然后往栈里写一个指向新内存的指针即可。
+
+这也正是我们所要做的，请看下面的代码：
+
+**代码 24-14 向应用程序传入 `cmdline`（kernel/exec.c）**
+```c
+    // 接下来把cmdline传给app，解析工作由CRT完成
+    // 这样我就不用管怎么把一个char **放到栈里了（（（（
+    int new_esp = last - first + 4 * 1024 * 1024 - 4;
+    int prev_brk = sys_sbrk(strlen(cmdline) + 5); // 分配cmdline这么长的内存，反正也输入不了1MB长的命令
+    strcpy((char *) (ds + prev_brk), cmdline); // sys_sbrk使用相对地址，要转换成以ds为基址的绝对地址需要加上ds
+    *((int *) (ds + new_esp)) = (int) prev_brk; // 把prev_brk的地址写进栈里，这个位置可以被_start访问
+    new_esp -= 4; // esp后移一个dword
+    // 中略
+    start_app(entry, 0 * 8 + 4, new_esp, 1 * 8 + 4, &(task_now()->tss.esp0));
+```
+
+`sys_sbrk` 返回的是相对 `ds_base` 的地址，所以下面的操作都要手动加上它。接下来手动存了一下新的 `esp`，这是为了化简程序。然后直接调用 `sbrk` 而不是 `malloc` 分配空间，没有中间商赚差价，牢记 `sbrk` 返回的是调用之前的 `program break`，所以此时的 `prev_brk` 正好就是新内存的起点。
+
+接下来调用 `strcpy`，向新内存写入 `cmdline`，为什么加 `ds` 前面已经说了。最后往栈里写入已经指向这片区域的 `prev_brk`，并同时把栈后移 4 位，这样让 `esp + 4` 指向 `prev_brk`，后面就可以从这里读出 `cmdline`。
+
+这边写完了，从 C 里读就更简单了，先从 `shell` 里偷一个 `cmd_parse`，然后如此修改 `_start`：
+
+**代码 24-15 能够接收参数的（apps/start.c）**
+```c
+#include <unistd.h>
+#include <stddef.h>
+
+#define MAX_ARG_NR 30
+
+static char *argv[MAX_ARG_NR] = {NULL}; // argv，字面意思
+
+int main(int argc, char **argv);
+
+static int cmd_parse(char *cmd_str, char **argv, char token)
+{
+    // shell.c里有自己抄去难道这个还要我给你写吗）））
+}
+
+void _start(char *cmdline)
+{
+    int argc = cmd_parse(cmdline, argv, ' ');
+    exit(main(argc, argv));
+}
+```
+
+看上去复杂了不少，不过没什么需要注意的，基本上都挺直接吧。
+
+哦对了，`cmd_parse` 会修改 `cmd_str` 的内容，所以在 `shell` 里要备份一下 `cmd_line`，然后把备份的传进 `create_process`：
+
+**代码 24-16 `shell` 里杂七杂八的小修改（apps/shell.c）**
+```c
+static char cmd_line[MAX_CMD_LEN] = {0}; // 输入命令行的内容
+static char cmd_line_back[MAX_CMD_LEN] = {0}; // 这一行是新加的
+static char *argv[MAX_ARG_NR] = {NULL}; // argv，字面意思
+```
+```c
+int try_to_run_external(char *name, int *exist)
+{
+    int ret = create_process(name, cmd_line_back, "/"); // 这里经过修改
+    *exist = false;
+    if (ret == -1) {
+        // 略过添加.bin的处理
+        ret = create_process(new_name, cmd_line_back, "/"); // 这里经过修改
+        if (ret == -1) return -1;
+    }
+    *exist = true;
+    ret = waitpid(ret);
+    return ret;
+}
+```
+
+现在，应用程序应该就已经可以接收参数了，可是拿什么来测试呢？根据我的经验，自己实现的东西都不能够说明问题，所以我们直接移植一个小程序玩玩吧！
+
+要想规模小、我们目前的系统调用就足够，还得有点实际用途能看出来成果，这条件虽然苛刻，但我还是成功找到了一个项目：[C in four functions](https://github.com/rswier/c4)，只有区区 500 行，且用到的大部分东西都已经实现。唯一需要注意的是 `memory.h` 和 `fcntl.h` 虽然没有，但里面的东西都已经实现，把 `include` 他们俩那两行注释掉即可。
+
+添加了新的应用程序，Makefile 也要修改，在 `APPS` 中添加一个 `out/c4.bin`，并在 `hd.img` 里写入：
+
+**代码 24-17 写入 `hd.img` 的内容（Makefile）**
+```makefile
+hd.img : out/boot.bin out/loader.bin out/kernel.bin $(APPS)
+	ftimgcreate hd.img -t hd -size 80
+	ftformat hd.img -t hd -f fat16
+	ftcopy out/loader.bin -to -img hd.img
+	ftcopy out/kernel.bin -to -img hd.img
+	ftcopy out/test_c.bin -to -img hd.img
+	ftcopy out/test2.bin -to -img hd.img
+	ftcopy out/shell.bin -to -img hd.img
+	ftcopy out/c4.bin -to -img hd.img
+	ftcopy apps/test_c.c -to -img hd.img
+	ftcopy apps/c4.c -to -img hd.img
+	dd if=out/boot.bin of=hd.img bs=512 count=1
+```
+
+我们不仅添加了 `c4.bin`，还添加了 `test_c.c` 和 `c4.c`。因为 `c4` 其实是一个小型的 C 解释器，可以直接执行 C 代码，但它是移植来的，这里不多做讲解。总之，既然能执行 C 代码，就得有 C 代码，`c4.c` 和 `test_c.c` 就是两个规模大和规模小的测试文件。
+
+现在终于可以编译运行，效果应如下图：
+
+![](images/graph-23-3.png)
+（图 24-2 来自 c4 的 Hello, World!）
+
+首先执行了编译的原生 `test_c`，然后用 `c4` 执行源代码 `test_c.c`，都没有问题；后来又先用 `c4` 自己运行自己 `c4.c`，然后再执行 `test_c.c`，再往下甚至又多套了一层，也是毫无问题。当然了，执行速度肯定是顺次往下越来越慢。`c4` 里也用到了 `malloc`，一石二鸟，这说明我们做的工作都成功了！
+
+忽然想起我们分配的资源来，之前在 `exit` 的时候都没有妥善释放，但经过测试，`exit` 的时候释放会出现莫名其妙的问题，所以只能放在 `wait` 里释放了，不知道这算不算一种我们 OS 特有的僵尸进程……（笑）
+
+**代码 24-18 释放任务所占资源（kernel/mtask.c）**
+```c
+int task_wait(int pid)
+{
+    task_t *task = &taskctl->tasks0[pid]; // 找出对应的task
+    while (task->my_retval.pid == -1); // 若没有返回值就一直等着
+    task->flags = 0; // 释放为可用
+    // 总算把你等死了，释放该任务所占资源
+    for (int i = 3; i < MAX_FILE_OPEN_PER_TASK; i++) {
+        if (task->fd_table[i] != -1) sys_close(task->fd_table[i]); // 关闭所有打开的文件
+    }
+    // 该任务malloc的所有东西都在数据段里，所以释放了数据段就相当于全释放了
+    if (task->is_user) kfree((void *) task->ds_base); // 释放数据段
+    return task->my_retval.val; // 拿到返回值
+}
+```
+
+再编译运行一遍，当然是毫无问题啦。这意味着我们的 OS 之旅终于可以暂告一段落了。
+
+不过告一段落是一方面，怎么总感觉差点东西？这个 `work_dir` 参数加了怎么没有用到呢？既然 `ftcopy` 支持目录为什么我们不支持呢？嗯……
+
+本来以为这一节就可以结束教程了，没想到还留了这一个瑕疵，就当是一个小尾巴吧。下一节我们将在原有文件系统的基础上进行修改，实现目录，或许还有一些其他的高级玩意哦。

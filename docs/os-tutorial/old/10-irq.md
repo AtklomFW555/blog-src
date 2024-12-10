@@ -2,86 +2,67 @@
 
 话说回来，我们前面一直提到中断，到底什么是中断？字面意思上讲，就是你正在持续的工作被突然打断。发挥联想记忆，可以知道，中断实际上就是在操作系统正常运行的过程中，让它被迫接收的信号。
 
-与现实生活中的中断不同，操作系统中，中断是操作系统**最本质的驱动力**，如果没有中断，一切都会非常复杂，CPU将花费大量的时间查询设备状态；而现在，不同的硬件会发不同的中断信号，在接收的过程中慢慢处理即可。
+与现实生活中的中断不同，操作系统中，中断是操作系统**最本质的驱动力**，如果没有中断，一切都会非常复杂，CPU将花费大量的时间查询设备状态；而现在，不同的硬件会发不同的中断信号，在接收的过程中慢慢处理即可。我们的中断像是打断正常工作，而 CPU 里的中断像是打断以回到正常工作，听起来似乎截然相反。
 
 扯得有点多，往回收收。由于0-31号IDT已经归给了异常，现在又有16个外设中断信号，那么最自然的想法，就是把它们放置在32-47号IDT。
 
 什么？你说电脑明明有一堆外设，中断号为什么这么少？仔细想想就会发现，如果所有的外设都给CPU发中断，那CPU不仅分辨不出来谁是谁，更是要炸了。因此，在x86框架下，所有的中断会被汇集到一个叫做8259A的芯片，它还有另一个名字，叫做**可编程中断控制器**（PIC），当然，目前已经被淘汰了。实际操作中，由PIC分辨每一个外设，并发送两个字节（0xCD 外设编号）给CPU，从而使得CPU自动执行对应外设的中断处理程序。
 
-好了，原理大致如此，我们开始。这么一看，中断处理和IDT也脱不了干系，先对16个外设中断信号对应的IDT进行设置，请添加在 `idt_flush` 之前：
+好了，原理大致如此，我们开始。这么一看，中断处理和IDT也脱不了干系，先对16个外设中断信号对应的IDT进行设置，以下是新的 `init_idt`：
 
 **代码 10-1 设置外设中断信号对应的中断描述符（kernel/gdtidt.c）**
 ```c
-    idt_set_gate(32, (uint32_t) irq0, 0x08, 0x8E);
-    idt_set_gate(33, (uint32_t) irq1, 0x08, 0x8E);
-    idt_set_gate(34, (uint32_t) irq2, 0x08, 0x8E);
-    idt_set_gate(35, (uint32_t) irq3, 0x08, 0x8E);
-    idt_set_gate(36, (uint32_t) irq4, 0x08, 0x8E);
-    idt_set_gate(37, (uint32_t) irq5, 0x08, 0x8E);
-    idt_set_gate(38, (uint32_t) irq6, 0x08, 0x8E);
-    idt_set_gate(39, (uint32_t) irq7, 0x08, 0x8E);
-    idt_set_gate(40, (uint32_t) irq8, 0x08, 0x8E);
-    idt_set_gate(41, (uint32_t) irq9, 0x08, 0x8E);
-    idt_set_gate(42, (uint32_t) irq10, 0x08, 0x8E);
-    idt_set_gate(43, (uint32_t) irq11, 0x08, 0x8E);
-    idt_set_gate(44, (uint32_t) irq12, 0x08, 0x8E);
-    idt_set_gate(45, (uint32_t) irq13, 0x08, 0x8E);
-    idt_set_gate(46, (uint32_t) irq14, 0x08, 0x8E);
-    idt_set_gate(47, (uint32_t) irq15, 0x08, 0x8E);
+static void init_idt()
+{
+    idt_ptr.limit = sizeof(idt_entry_t) * 256 - 1;
+    idt_ptr.base = (uint32_t) &idt_entries;
+
+    memset(&idt_entries, 0, sizeof(idt_entry_t) * 256);
+
+    for (int i = 0; i < 32 + 16; i++) {
+        idt_set_gate(i, (uint32_t) intr_table[i], 0x08, 0x8E);
+    }
+
+    idt_flush((uint32_t) &idt_ptr);
+}
 ```
 
-（这一部分直接放在末尾即可）
+找不同环节，你能发现哪里做了修改吗？其实就是在 32 后面加了 16，因为总共有 16 个外设中断信号嘛。
 
-**代码 10-2 16个外设中断信号的声明（kernel/gdtidt.h）**
-```c
-extern void irq0();
-extern void irq1();
-extern void irq2();
-extern void irq3();
-extern void irq4();
-extern void irq5();
-extern void irq6();
-extern void irq7();
-extern void irq8();
-extern void irq9();
-extern void irq10();
-extern void irq11();
-extern void irq12();
-extern void irq13();
-extern void irq14();
-extern void irq15();
-```
+`interrupt.asm` 中的代码几乎与异常时如出一辙，这些东西要放在 `isr_common_stub` 之前：
 
-`interrupt.asm` 中的代码几乎与异常时如出一辙：
-
-**代码 10-3 外设中断信号的实现（kernel/interrupt.asm）**
-```c
-%macro IRQ 2
-global irq%1
+**代码 10-2 外设中断信号的实现（kernel/interrupt.asm）**
+```asm
+section .data
+%macro IRQ 1
+section .text
 irq%1:
     cli
     push byte 0
-    push %2
+    push %1
     jmp irq_common_stub
+section .data
+dd irq%1
 %endmacro
 
-IRQ 0, 32
-IRQ 1, 33
-IRQ 2, 34
-IRQ 3, 35
-IRQ 4, 36
-IRQ 5, 37
-IRQ 6, 38
-IRQ 7, 39
-IRQ 8, 40
-IRQ 9, 41
-IRQ 10, 42
-IRQ 11, 43
-IRQ 12, 44
-IRQ 13, 45
-IRQ 14, 46
-IRQ 15, 47
+IRQ 32
+IRQ 33
+IRQ 34
+IRQ 35
+IRQ 36
+IRQ 37
+IRQ 38
+IRQ 39
+IRQ 40
+IRQ 41
+IRQ 42
+IRQ 43
+IRQ 44
+IRQ 45
+IRQ 46
+IRQ 47
 
+section .text
 [extern irq_handler]
 ; 通用中断处理程序
 irq_common_stub:
@@ -110,9 +91,9 @@ irq_common_stub:
     iret ; 从中断返回
 ```
 
-只是调用的参数换了个名字。最后是 `irq_handler`：
+结果 IRQ 宏里还是一样的小把戏，只是调用的宏换了个名字。最后是 `irq_handler`，放上来看看：
 
-**代码 10-4 中断处理程序的C语言接口（kernel/isr.c）**
+**代码 10-3 中断处理程序的C语言接口（kernel/isr.c）**
 ```c
 void irq_handler(registers_t regs)
 {
@@ -128,7 +109,7 @@ void irq_handler(registers_t regs)
 
 完整 `main.c` 如下：
 
-**代码 10-5 测试用（kernel/main.c）**
+**代码 10-4 测试用（kernel/main.c）**
 ```c
 #include "monitor.h"
 #include "gdtidt.h"
@@ -161,11 +142,11 @@ void kernel_main() // kernel.asm会跳转到这里
 
 那么，这个神秘的8号异常是哪里来的呢？
 
-解铃还须系铃人。我们鼓捣了半天，偏偏把最重要的 PIC 给忘了！而16位模式下，PIC默认时钟中断为8号外设，由于我们没管PIC，所以它还是16位的状态，此时出现了时钟中断，PIC自然就会给CPU发送8号中断！
+解铃还须系铃人。我们鼓捣了半天，偏偏把最重要的 PIC 给忘了！而16位模式下，PIC默认时钟中断为对应的是 8 号而不是我们新设定的 32 号，由于我们没管PIC，所以它还是16位的状态，此时出现了时钟中断，PIC自然就会给CPU发送8号中断！
 
 重设PIC也是非常古老、非常屎山也是非常定式的操作，由于涉及到硬件，这里不多解说。总之只要添加这8行代码，就没有问题（把它们添加在 `init_idt` 中的 `memset` 之前）：
 
-**代码 10-6 重设PIC（kernel/gdtidt.c）**
+**代码 10-5 重设PIC（kernel/gdtidt.c）**
 ```c
 // 初始化PIC
     outb(0x20, 0x11);
@@ -191,7 +172,7 @@ void kernel_main() // kernel.asm会跳转到这里
 
 我们在 `irq_handler` 中加入EOI的发送：
 
-**代码 10-7 发送EOI（kernel/isr.c）**
+**代码 10-6 发送EOI（kernel/isr.c）**
 ```c
 void irq_handler(registers_t regs)
 {
@@ -217,7 +198,7 @@ void irq_handler(registers_t regs)
 
 首先，定义自定义中断处理程序函数：
 
-**代码 10-8 开始自定义中断处理程序（kernel/isr.h）**
+**代码 10-7 开始自定义中断处理程序（kernel/isr.h）**
 ```c
 #define IRQ0 32
 #define IRQ1 33
@@ -242,14 +223,14 @@ void register_interrupt_handler(uint8_t n, isr_t handler);
 
 下面已经添加了注册函数了，在 `isr.c` 中加入一行：
 
-**代码 10-9 自定义中断处理程序列表（kernel/isr.c）**
+**代码 10-8 自定义中断处理程序列表（kernel/isr.c）**
 ```c
 static isr_t interrupt_handlers[256];
 ```
 
 由于 `isr_t` 是函数指针，因此可以用是否为 NULL 判断是否存在自定义中断处理程序。这是新版的 `irq_handler`：
 
-**代码 10-10 将中断信号分发给自定义处理程序，以及注册函数（kernel/isr.c）**
+**代码 10-9 将中断信号分发给自定义处理程序，以及注册函数（kernel/isr.c）**
 ```c
 void irq_handler(registers_t regs)
 {
@@ -269,7 +250,7 @@ void register_interrupt_handler(uint8_t n, isr_t handler)
 }
 ```
 
-为避免 `regs` 在传值中出现不必要的拷贝，这里选择使用指针形式对自定义中断处理程序进行传入。
+为避免 `regs` 在传值中出现不必要的拷贝，这里选择使用指针形式向自定义中断处理程序传入寄存器。
 
 现在再编译运行，应该恢复到图 8-6 的状态了，一片祥和。
 
