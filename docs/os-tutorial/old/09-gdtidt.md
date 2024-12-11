@@ -465,7 +465,7 @@ void isr_handler(registers_t regs)
 
 这里为什么要 `cli` 和 `while (1);` 呢？一般出现异常时已经无可挽回，因此直接悬停在处理程序里即可。`cli` 防止下一节要设置的外部中断来烦人。
 
-**代码 9-17 registers_t的定义（kernel/isr.h）**
+**代码 9-17 registers_t的定义（include/isr.h）**
 ```c
 #ifndef _ISR_H_
 #define _ISR_H_

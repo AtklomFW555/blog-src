@@ -10,7 +10,9 @@
 
 **代码 15-1 `0x80` 号中断描述符（kernel/gdtidt.c）**
 ```c
-    idt_set_gate(47, (uint32_t) irq15, 0x08, 0x8E);
+    for (int i = 0; i < 32 + 16; i++) {
+        idt_set_gate(i, (uint32_t) intr_table[i], 0x08, 0x8E);
+    }
 
     idt_set_gate(0x80, (uint32_t) syscall_handler, 0x08, 0x8E | 0x60); // 这里是新增的
 

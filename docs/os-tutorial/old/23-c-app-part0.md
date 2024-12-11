@@ -487,9 +487,14 @@ ELF 头的作用不必多说，这里之所以用两重指针，是因为我们�
 
 **代码 23-19 启动 ELF（kernel/exec.c）**
 ```c
+#include "elf.h"
+
+// ...中略...
+
 void app_entry(const char *app_name, const char *cmdline, const char *work_dir)
 {
     // ...上略...
+    int first, last;
     char *code; // 存放代码的缓冲区
     int entry = load_elf((Elf32_Ehdr *) buf, &code, &first, &last); // buf是文件读进来的那个缓冲区，code是存实际代码的
     if (entry == -1) task_exit(-1); // 解析失败，直接exit(-1)
@@ -515,7 +520,7 @@ void app_entry(const char *app_name, const char *cmdline, const char *work_dir)
 
 int main()
 {
-    printf("Hello, World!");
+    printf("Hello, World!\n");
     return 0;
 }
 ```
@@ -542,7 +547,7 @@ void _start()
 
 对 Makefile 这么修改一下：
 
-**代码 23-22 新的 Makefile（Makefile）**
+**代码 23-22 新加的部分 Makefile（Makefile）**
 ```makefile
 LIBC_OBJECTS = out/syscall_impl.o out/stdio.o out/string.o
 
@@ -565,22 +570,22 @@ out/%.bin : apps/%.c apps/start.c out/tulibc.a
 
 下面编译硬盘映像的部分，我们也做了修改。
 
-**代码 23-23 新的 Makefile（续）（Makefile）**
+**代码 23-23 新加的部分 Makefile（续）（Makefile）**
 ```makefile
 APPS = out/test_c.bin
 
 # 中略
 
 hd.img : out/boot.bin out/loader.bin out/kernel.bin $(APPS)
-	ftimgcreate hd.img -t hd -size 80
-	ftformat hd.img -t hd -f fat16
-	ftcopy out/loader.bin -to -img hd.img
-	ftcopy out/kernel.bin -to -img hd.img
-	ftcopy out/test_c.bin -to -img hd.img
-	dd if=out/boot.bin of=hd.img bs=512 count=1
+	ftimage hd.img -size 80 -bs out/boot.bin
+	ftcopy hd.img -srcpath out/loader.bin -to -dstpath /loader.bin
+	ftcopy hd.img -srcpath out/kernel.bin -to -dstpath /kernel.bin
+	ftcopy hd.img -srcpath out/test_c.bin -to -dstpath /test_c.bin
 ```
 
 在 `what you need` 的部分，我们新添加了一个 `APPS` 变量，它代表我们需要编译的所有应用，目前只有一个 `test_c.bin`。编译出来以后，我们在下面的命令中进行写入。
+
+当然，在最上面的 `OBJS` 里加上 `out/elf.o` 应该不用我再提醒了吧。
 
 现在应该就可以开始运行了。编译，运行，效果如下：
 

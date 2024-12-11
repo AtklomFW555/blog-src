@@ -814,11 +814,9 @@ Makefile 也要进行修改，从此以后不再生成 `a.img` 了，而是生�
 **代码 21-8 新版 `Makefile`（Makefile）**
 ```makefile
 hd.img : out/boot.bin out/loader.bin out/kernel.bin
-	ftimgcreate hd.img -t hd -size 80
-	ftformat hd.img -t hd -f fat16
-	ftcopy out/loader.bin -to -img hd.img
-	ftcopy out/kernel.bin -to -img hd.img
-	dd if=out/boot.bin of=hd.img bs=512 count=1
+	ftimage hd.img -size 80 -bs out/boot.bin
+	ftcopy hd.img -srcpath out/loader.bin -to -dstpath /loader.bin
+	ftcopy hd.img -srcpath out/kernel.bin -to -dstpath /kernel.bin
 
 run : hd.img
 	qemu-system-i386 -hda hd.img

@@ -183,6 +183,8 @@ typedef struct TASK {
     }
 ```
 
+然后就可以把 `task_alloc` 中设置 `ldtr` 的语句删掉了。
+
 现在有了 LDT，该想办法进入 r3 了。或许有的读者会就此想当然：
 
 > 改变 cs 和 eip？这不是一个 farjmp/farcall 就可以做到了吗？
@@ -295,9 +297,13 @@ start_app: ; void start_app(int new_eip, int new_cs, int new_esp, int new_ss, in
 怎么实现系统调用呢？这个好办，我们程序里怎么用的这就怎么用。至于用什么，简单输出一个字符串，用 `write` 系统调用就可以。
 
 > `write` 系统调用：
+>
 > eax = 1
+>
 > ebx = fd
+>
 > ecx = buf
+>
 > edx = size
 
 **代码 22-14 使用系统调用输出字符（test_app.asm）**
@@ -325,7 +331,7 @@ strlen equ $ - string
 我们来仔细阅读现在的系统调用处理程序 `syscall_handler`：
 
 **代码 22-15 现在的 `syscall_handler`**
-```c
+```asm
 [extern syscall_manager]
 [global syscall_handler]
 syscall_handler:
@@ -399,6 +405,8 @@ typedef struct TASK {
 
 **代码 22-18 执行应用时更新数据段基址（kernel/exec.c）**
 ```c
+#include "mtask.h" // 放在开头
+// 中略
 void app_entry(const char *app_name, const char *cmdline, const char *work_dir)
 {
     int fd = sys_open((char *) app_name, O_RDONLY);
@@ -418,6 +426,8 @@ void app_entry(const char *app_name, const char *cmdline, const char *work_dir)
 
 **代码 22-19 处理地址偏移问题（临时）**
 ```c
+#include "mtask.h"
+
 void syscall_manager(int edi, int esi, int ebp, int esp, int ebx, int edx, int ecx, int eax)
 {
     int ds_base = task_now()->ds_base;
@@ -440,4 +450,4 @@ void syscall_manager(int edi, int esi, int ebp, int esp, int ebx, int edx, int e
 
 还是在下一节，我们会用 C 写一些简单的小程序来跑。
 
-或许有人问了，那么最后一节干什么呢？先卖个关子哦。
+或许有人问了，那么 24 节干什么呢？先卖个关子哦。

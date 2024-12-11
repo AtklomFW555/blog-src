@@ -67,7 +67,7 @@ void get_current_time(current_time_t *ctime)
 
 总共20行，我们就实现了对 RTC 的读取。那么让我们进入 `kernel/main.c` 添加测试代码看看效果：
 
-**代码 17-3 测试 RTC（drivers/cmos.c）**
+**代码 17-3 测试 RTC（kernel/main.c）**
 ```c
 void kernel_main() // kernel.asm会跳转到这里
 {
@@ -313,17 +313,14 @@ void hd_write(int lba, int sec_cnt, void *buffer)
 
 为了后面行文方便，同时也是为了配置环境方便，这里引入我自制的一个开源工具：[myfattools](https://gitee.com/foolish-shabby/myfattools)，使用它可以方便地对虚拟硬盘进行操作，包括但不限于创建、格式化、拷贝文件进出等等，目前已经在 Windows 7、Windows 11 和 iOS 上进行过测试（实际上 myfattools 就是在这三种操作系统上开发的）。为了跨平台需要 ~~因为我懒~~，请读者自行下载这几个 `.c` 文件，然后用 `gcc` 自行编译为二进制，放在可以随时调用到的地方（比如这个项目的根目录处）以备调用。
 
-（注：由于此程序目前名义上正在重构，所以请以 old 文件夹中的内容为准。当然实际上重构已经停滞了。）
+本次测试需要用到的程序为 `ftimage`，确认这个程序是否存在且可供调用：
 
-本次测试需要用到的程序为 `ftimgcreate` 和 `ftformat`，确认这两个程序是否都已存在且可供调用：
-
-![](images/graph-17-6-1.png)
-![](images/graph-17-6-2.png)
+![](images/graph-17-6.png)
 （图 17-6 程序存在情况）
 
-如果在命令行输入 `ftimgcreate` 与 `ftformat` 后，输出如上两图所示（或类似），则说明这两个程序配置相当成功；否则，请检查是否把这两个程序放在了正确的地方。
+如果在命令行输入 `ftimage` 后，输出如上图所示（或类似），则说明这两个程序配置相当成功；否则，请检查是否把这两个程序放在了正确的地方。
 
-在命令行中执行这两条命令：
+在命令行中执行这条命令：
 
 ![](images/graph-17-7.png)
 （图 17-7 执行命令）

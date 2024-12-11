@@ -183,7 +183,7 @@ typedef _Bool bool;
 
 如你所见，这三个头文件基本上全都很短小，什么安全保护措施也没加，毕竟纯玩玩也用不到，到时候从什么地方copy一个就行了（bushi）。
 
-另外，在 `stdio.h` 中把 `#include "common.h"` 替换成了 `#include "string.h"` 和 `#include "stdint.h"` 两行，在 `unistd.h` 的函数声明开始前增加了一行 `#include "stdint.h"`。这样做是为了确保这些标准库文件与操作系统文件无关 ~~其实就是闲的~~。
+另外，在 `stdio.h` 中把 `#include "common.h"` 替换成了 `#include "string.h"` 和 `#include "stdint.h"` 两行，在 `unistd.h` 和 `string.h` 的函数声明开始前增加了一行 `#include "stdint.h"`。这样做是为了确保这些标准库文件与操作系统文件无关 ~~其实就是闲的~~。
 
 接下来在 `kernel_main` 启动 `shell` 的部分也要修改：
 
@@ -207,7 +207,7 @@ void kernel_main() // kernel.asm会跳转到这里
 
 `task_a` 变量从头到尾没有被用到，因此就删了。下面的 `sys_create_process` 实质上开启了一个新任务执行 `shell.bin`。最后，调用 `task_exit(0)` 退出当前任务，于是操作系统就进入后台，而主要是 ring3 用户层的 `shell` 在起交互作用了。
 
-在 `Makefile` 的 `APPS` 中加入 `out/shell.bin`，`OBJS` 中删除 `out/shell.o`，完成最后的交接。`shell` 的地位甚至因此还提升了（？）
+在 `Makefile` 的 `APPS` 中加入 `out/shell.bin`，`OBJS` 中删除 `out/shell.o`，生成 `hd.img` 时加一行 `	ftcopy hd.img -srcpath out/shell.bin -to -dstpath /shell.bin`，完成最后的交接。`shell` 的地位甚至因此还提升了（？）
 
 最后当然是编译运行啦：
 
@@ -560,7 +560,7 @@ void free(void *block)
 
 中间的大 `if` 就是在向操作系统归还内存，首先判断能不能归还，只要当前的这个内存正好抵着现在的 `program break`，那就可以把这段内存归还。首先判断是不是只有这一个内存块，如果是的话直接清空整个链表即可；否则，由于链表中的内存块按分配先后顺序排列，那么在堆末尾的内存块，一定也在链表末尾。所以，这里直接遍历整个链表，在即将到达末尾的时候把末尾内存块踢出链表，并同时更新现在的末尾位置。最后，就可以释放掉这个内存块对应大小的内存，以及这个内存块本身占据的内存。以免你忘了，`sbrk` 可以使用正数分配、负数释放。而使用 `sbrk(0)`，则相当于返回现在的 `program break`，因为它的行为相当于给原 `program break` 加 0 再返回旧的。
 
-好了，一个简单的 `malloc/free` 就已经实现了，居然连 100 行都不到，应该很简单吧。
+好了，一个简单的 `malloc/free` 就已经实现了，居然连 100 行都不到，应该很简单吧。把 `out/malloc.o` 添加到 `LIBC_OBJECTS` 当中，就大功告成了。
 
 有了 `malloc` 打底（事实上有 `sbrk` 就够了），给应用程序传参也就不是什么难事，`malloc` 就等着写完应用程序传参再测吧。
 
@@ -584,6 +584,8 @@ void free(void *block)
     // 中略
     start_app(entry, 0 * 8 + 4, new_esp, 1 * 8 + 4, &(task_now()->tss.esp0));
 ```
+
+由于使用了 `sys_sbrk`，所以需要放在 `brk_end` 设置完成之后；又由于一些原因，所以应该放在 `ds_base` 设置完成之前。
 
 `sys_sbrk` 返回的是相对 `ds_base` 的地址，所以下面的操作都要手动加上它。接下来手动存了一下新的 `esp`，这是为了化简程序。然后直接调用 `sbrk` 而不是 `malloc` 分配空间，没有中间商赚差价，牢记 `sbrk` 返回的是调用之前的 `program break`，所以此时的 `prev_brk` 正好就是新内存的起点。
 
@@ -639,27 +641,45 @@ int try_to_run_external(char *name, int *exist)
     return ret;
 }
 ```
+```c
+        if (cmd_line[0] == 0) continue; // 啥也没有，是换行，直接跳过
+        strcpy(cmd_line_back, cmd_line); // 这里是新增加的
+        int argc = cmd_parse(cmd_line, argv, ' '); // 解析命令，按照cmd_parse的要求传入，默认分隔符为空格
+···
 
 现在，应用程序应该就已经可以接收参数了，可是拿什么来测试呢？根据我的经验，自己实现的东西都不能够说明问题，所以我们直接移植一个小程序玩玩吧！
 
 要想规模小、我们目前的系统调用就足够，还得有点实际用途能看出来成果，这条件虽然苛刻，但我还是成功找到了一个项目：[C in four functions](https://github.com/rswier/c4)，只有区区 500 行，且用到的大部分东西都已经实现。唯一需要注意的是 `memory.h` 和 `fcntl.h` 虽然没有，但里面的东西都已经实现，把 `include` 他们俩那两行注释掉即可。
 
+另外 `c4` 里用到了 `stdlib.h`，简单写一个：
+
+**代码 24-17 include/stdlib.h**
+```c
+#ifndef _STDLIB_H_
+#define _STDLIB_H_
+
+void *malloc(int size);
+void free(void *buf);
+
+#endif
+```
+
+虽然 `exit` 好像也应该放在里面，但由于现在的 `exit` 与标准库行为不同，就先不放了。
+
 添加了新的应用程序，Makefile 也要修改，在 `APPS` 中添加一个 `out/c4.bin`，并在 `hd.img` 里写入：
 
-**代码 24-17 写入 `hd.img` 的内容（Makefile）**
+**代码 24-18 写入 `hd.img` 的内容（Makefile）**
 ```makefile
 hd.img : out/boot.bin out/loader.bin out/kernel.bin $(APPS)
-	ftimgcreate hd.img -t hd -size 80
-	ftformat hd.img -t hd -f fat16
-	ftcopy out/loader.bin -to -img hd.img
-	ftcopy out/kernel.bin -to -img hd.img
-	ftcopy out/test_c.bin -to -img hd.img
-	ftcopy out/test2.bin -to -img hd.img
-	ftcopy out/shell.bin -to -img hd.img
-	ftcopy out/c4.bin -to -img hd.img
-	ftcopy apps/test_c.c -to -img hd.img
-	ftcopy apps/c4.c -to -img hd.img
-	dd if=out/boot.bin of=hd.img bs=512 count=1
+	ftimage hd.img -size 80 -bs out/boot.bin
+	ftcopy hd.img -srcpath out/loader.bin -to -dstpath /loader.bin 
+	ftcopy hd.img -srcpath out/kernel.bin -to -dstpath /kernel.bin
+	ftcopy hd.img -srcpath out/test_c.bin -to -dstpath /test_c.bin
+	ftcopy hd.img -srcpath out/test2.bin -to -dstpath /test2.bin
+	ftcopy hd.img -srcpath out/shell.bin -to -dstpath /shell.bin
+	ftcopy hd.img -srcpath out/c4.bin -to -dstpath /c4.bin
+	ftcopy hd.img -srcpath apps/test_c.c -to -dstpath /test_c.c
+	ftcopy hd.img -srcpath apps/c4.c -to -dstpath /c4.c
 ```
 
 我们不仅添加了 `c4.bin`，还添加了 `test_c.c` 和 `c4.c`。因为 `c4` 其实是一个小型的 C 解释器，可以直接执行 C 代码，但它是移植来的，这里不多做讲解。总之，既然能执行 C 代码，就得有 C 代码，`c4.c` 和 `test_c.c` 就是两个规模大和规模小的测试文件。
@@ -673,7 +693,7 @@ hd.img : out/boot.bin out/loader.bin out/kernel.bin $(APPS)
 
 忽然想起我们分配的资源来，之前在 `exit` 的时候都没有妥善释放，但经过测试，`exit` 的时候释放会出现莫名其妙的问题，所以只能放在 `wait` 里释放了，不知道这算不算一种我们 OS 特有的僵尸进程……（笑）
 
-**代码 24-18 释放任务所占资源（kernel/mtask.c）**
+**代码 24-19 释放任务所占资源（kernel/mtask.c）**
 ```c
 int task_wait(int pid)
 {

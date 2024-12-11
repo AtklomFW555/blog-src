@@ -74,7 +74,7 @@ int get_hd_sects()
         buffer += 2;
     }
     int sectors = ((int) hdinfo[61] << 16) + hdinfo[60];
-    kfree(hd_info);
+    kfree(hdinfo);
     return (hd_size_cache = sectors);
 }
 ```
@@ -256,27 +256,9 @@ typedef struct FAT_BPB_HEADER {
 
 这其中有一些常量，留待下一节处理，先放着不管。
 
-按照上面的方法，应该就可以格式化出一个 FAT16 文件系统了。下面我们进行测试。
+按照上面的方法，应该就可以格式化出一个 FAT16 文件系统了。可由于 `ftimage` 会直接生成一个 FAT16 格式的镜像，从而导致无法测试，我们就暂且认为它是对的吧。
 
-首先，在命令行输入 `ftimgcreate hd.img -t hd -size 80`，重新创建虚拟硬盘 `hd.img`：
-
-![](images/graph-18-2.png)
-
-（图 18-2 测试步骤1）
-
-然后，调用 `ftls hd.img -l`，确认 `hd.img` 中不存在 FAT16 文件系统：
-
-![](images/graph-18-3.png)
-
-（图 18-3 测试步骤2）
-
-在 `main.c` 中添加 `fat16_format_hd()`，编译，运行，等待 10 秒后，再次 `ftls hd.img -l`，确认文件系统已经存在：
-
-![](images/graph-18-4.png)
-
-（图 18-4 测试步骤3）
-
-文件系统已经成功创建，说明我们的格式化函数已经完成。接下来，就可以开始进行创建文件和打开文件的操作了。
+接下来，就可以开始进行创建文件和打开文件的操作了。
 
 目前而言，创建文件和打开文件都只需要操作根目录区即可完成。根目录区中，一个文件对应的信息为 32 个字节，具体代码如下所示：
 
@@ -312,9 +294,9 @@ int lfn2sfn(const char *lfn, char *sfn)
     if (len_name > 8) return -1; // 文件名长于8个字符，不支持
     if (len_ext > 3) return -1; // 扩展名长于3个字符，不支持
     // 事实上FAT对此有解决方案，称为长文件名（LFN），但实现较为复杂，暂时先不讨论
-    char *name = (char *) malloc(10); // 多分配点内存
+    char *name = (char *) kmalloc(10); // 多分配点内存
     char *ext = NULL; // ext不一定有
-    if (len_ext > 0) ext = (char *) malloc(5); // 有扩展名，分配内存
+    if (len_ext > 0) ext = (char *) kmalloc(5); // 有扩展名，分配内存
     memcpy(name, lfn, len_name); // 把name从lfn中拷出来
     if (ext) memcpy(ext, lfn + last_dot + 1, len_ext); // 把ext从lfn中拷出来
     if (name[0] == 0xe5) name[0] = 0x05; // 如果第一个字节恰好是0xe5（已删除），将其更换为0x05
@@ -372,13 +354,13 @@ fileinfo_t *read_dir_entries(int *dir_ents)
 
 ![](images/graph-18-5.png)
 
-（图 18-5 创建文件）
+（图 18-2 创建文件）
 
 用 `ftcopy` 命令将文件写入虚拟硬盘 `hd.img`：
 
 ![](images/graph-18-6.png)
 
-（图 18-6 写入虚拟硬盘，这里用 ftls 确认写入成功）
+（图 18-3 写入虚拟硬盘，这里用 ftls 确认写入成功）
 
 扩写上面的测试代码：
 
@@ -393,7 +375,7 @@ fileinfo_t *read_dir_entries(int *dir_ents)
 编译，运行，效果如下：
 ![](images/graph-18-7.png)
 
-（图 18-7 输出的文件名）
+（图 18-4 输出的文件名）
 
 注意到，将 `ilovehon.kai` 手工转化为 8.3 文件名也为 `ILOVEHONKAI`，因此可知 `read_dir_entries` 实现成功。
 
@@ -501,12 +483,12 @@ int fat16_open_file(fileinfo_t *finfo, char *filename)
 
 ![](images/graph-18-8.png)
 
-（图 18-8 创建文件疑似成功）
+（图 18-5 创建文件疑似成功）
 
 在命令行中使用 `ftls` 工具，确认文件已经成功创建：
 
 ![](images/graph-18-9.png)
 
-（图 18-9 创建文件成功）
+（图 18-6 创建文件成功）
 
 好了，那么这一节作为我们实现 FAT16 的第一战，显然效果非常成功。下一节我们来实现文件的读取、写入和删除，从而为后续的包装打好地基。
