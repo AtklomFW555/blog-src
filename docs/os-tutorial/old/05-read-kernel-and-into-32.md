@@ -316,6 +316,17 @@ i686-elf-ld -s -o kernel.bin kernel.o
 edimg imgin:a.img copy from:loader.bin to:@: copy from:kernel.bin to:@: imgout:a.img
 ```
 
+对 Linux 而言则要改成这样：
+
+```plain
+mkdir floppy
+sudo mount -o loop a.img ./floppy/
+cp loader.bin ./floppy/ -v
+cp kernel.bin ./floppy/ -v
+sudo umount ./floppy/
+rmdir floppy
+```
+
 这样就把 `kernel.bin` 也给写入到磁盘里来了。
 
 > 唉唉唉，别想避重就轻，你还没解释那堆东西到底是什么玩意呢。

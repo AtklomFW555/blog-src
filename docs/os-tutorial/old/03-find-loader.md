@@ -340,7 +340,7 @@ LABEL_FILENAME_FOUND: ; 找到了则到这里
 nasm loader.asm -o loader.bin
 ```
 
-虽然得到了 `loader.bin`，但我们的写入工作在此处就有两个分支了。如果您使用的是 `Linux` 或 `macOS`，请使用下列命令将 `loader.bin` 写入磁盘：
+虽然得到了 `loader.bin`，但我们的写入工作在此处就有分支了。如果您使用的是 `Linux`，请使用下列命令将 `loader.bin` 写入磁盘：
 ```plain
 mkdir floppy
 sudo mount -o loop a.img ./floppy/

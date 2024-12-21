@@ -28,7 +28,7 @@
 
 [qemu](https://qemu.weilnetz.de/w32/2022/)
 
-[make](https://sourceforge.net/projects/gnuwin32/files/make/)
+[make](https://downloads.sourceforge.net/project/ezwinports/make-4.4.1-without-guile-w32-bin.zip)
 
 [dd](http://www.chrysocome.net/dd)
 
@@ -36,22 +36,10 @@
 
 [edimg](https://share.weiyun.com/Q1yUyjRp)（这个就是《30天自制操作系统》的写盘工具）
 
-如果您使用的是 `macOS`，那么请注意，系统内置的 `gcc` 会把文件编译成 `Mach-O` 格式，请通过 `Homebrew` 下载交叉编译器：
-
-`brew install i386-elf-binutils`
-
-`brew install i386-elf-gcc`
-
-然后我们还需要去往 [nasm 官网](http://nasm.us)获取可执行文件，并执行：
-
-`brew install qemu`
-
-以获取 qemu。
-
 在安装完之后，如果您使用的是 `Windows`，请**确保它们的路径位于 PATH 下！**
 
-除此之外便没什么重点了，不过，对于下文给出的工具名称**默认以 `Windows` 为准**，若您使用 `Linux`，请去掉工具前缀，若您使用 `macOS`，请将工具前缀中的 `i686` 改为 `i386`！！！
+除此之外便没什么重点了，不过，对于下文给出的工具名称**默认以 `Windows` 为准**，若您使用 `Linux`，请去掉工具前缀！！！
 
-对了，如果您使用的是 `Linux` 或 `macOS`，请确保您在 `dd` 命令的后面**加入 `conv=notrunc`** ！！！
+对了，如果您使用的是 `Linux`，请确保您在 `dd` 命令的后面**加入 `conv=notrunc`** ！！！
 
 那么，开发环境配置正式结束，征程开始！
