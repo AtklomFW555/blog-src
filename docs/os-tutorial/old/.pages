@@ -25,4 +25,4 @@ nav:
     - 23 C语言应用程序（上）: 23-c-app-part0.md
     - 24 C语言应用程序（下）: 24-c-app-part1.md
     - 25 总结 : 25-the-end.md
-    - 26 实现FAT16文件系统（5）——支持目录: 26-fat16-directories.md
+    - 26 实现 ANSI 转义序列: 26-ansi-escape-code.md
