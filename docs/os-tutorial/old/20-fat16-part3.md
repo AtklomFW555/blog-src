@@ -14,6 +14,10 @@ typedef enum FILE_TYPE {
     FT_UNKNOWN
 } file_type_t;
 
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+
 typedef enum oflags {
     O_RDONLY,
     O_WRONLY,
@@ -150,7 +154,7 @@ int sys_open(char *filename, uint32_t flags)
 
 这个缓冲区很快就会在下面的 `read` 和 `write` 中用到，由于这两者操作逻辑较为类似，合并到同一个代码块里来：
 
-**代码 20-7 `read`、`write`：读写文件（fs/fat16.c）**
+**代码 20-7 `read`、`write`：读写文件（fs/file.c）**
 ```c
 int sys_write(int fd, const void *msg, int len)
 {
@@ -265,7 +269,7 @@ int sys_close(int fd)
 int sys_lseek(int fd, int offset, uint8_t whence)
 {
     if (fd < 3) return -1; // 不是被打开的文件，返回
-    if (whence < 1 || whence > 3) return -1; // whence只能为123，分别对应SET、CUR、END，返回
+    if (whence != SEEK_SET && whence != SEEK_CUR && whence != SEEK_END) return -1; // 不为SET、CUR、END中任何一种，返回
     task_t *task = task_now(); // 获取当前任务
     file_t *cfile = &file_table[task->fd_table[fd]]; // 获取fd对应的文件
     fileinfo_t *fhandle = (fileinfo_t *) cfile->handle; // 文件实际上对应的fileinfo

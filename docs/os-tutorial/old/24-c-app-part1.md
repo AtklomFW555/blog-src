@@ -645,7 +645,7 @@ int try_to_run_external(char *name, int *exist)
         if (cmd_line[0] == 0) continue; // 啥也没有，是换行，直接跳过
         strcpy(cmd_line_back, cmd_line); // 这里是新增加的
         int argc = cmd_parse(cmd_line, argv, ' '); // 解析命令，按照cmd_parse的要求传入，默认分隔符为空格
-···
+```
 
 现在，应用程序应该就已经可以接收参数了，可是拿什么来测试呢？根据我的经验，自己实现的东西都不能够说明问题，所以我们直接移植一个小程序玩玩吧！
 
