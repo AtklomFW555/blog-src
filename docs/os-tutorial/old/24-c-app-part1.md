@@ -675,7 +675,6 @@ hd.img : out/boot.bin out/loader.bin out/kernel.bin $(APPS)
 	ftcopy hd.img -srcpath out/loader.bin -to -dstpath /loader.bin 
 	ftcopy hd.img -srcpath out/kernel.bin -to -dstpath /kernel.bin
 	ftcopy hd.img -srcpath out/test_c.bin -to -dstpath /test_c.bin
-	ftcopy hd.img -srcpath out/test2.bin -to -dstpath /test2.bin
 	ftcopy hd.img -srcpath out/shell.bin -to -dstpath /shell.bin
 	ftcopy hd.img -srcpath out/c4.bin -to -dstpath /c4.bin
 	ftcopy hd.img -srcpath apps/test_c.c -to -dstpath /test_c.c
@@ -689,7 +688,7 @@ hd.img : out/boot.bin out/loader.bin out/kernel.bin $(APPS)
 ![](images/graph-24-2.png)
 （图 24-2 来自 c4 的 Hello, World!）
 
-首先执行了编译的原生 `test_c`，然后用 `c4` 执行源代码 `test_c.c`，都没有问题；后来又先用 `c4` 自己运行自己 `c4.c`，然后再执行 `test_c.c`，再往下甚至又多套了一层，也是毫无问题。当然了，执行速度肯定是顺次往下越来越慢。`c4` 里也用到了 `malloc`，一石二鸟，这说明我们做的工作都成功了！
+首先执行了编译的原生 `test_c`，然后用 `c4` 执行源代码 `test_c.c`，都没有问题；后来又先用 `c4` 自己运行自己 （`c4.c`），然后再执行 `test_c.c`，再往下甚至又多套了一层，也是毫无问题。当然了，执行速度肯定是顺次往下越来越慢。`c4` 里也用到了 `malloc`，一石二鸟，这说明我们做的工作都成功了！
 
 忽然想起我们分配的资源来，之前在 `exit` 的时候都没有妥善释放，但经过测试，`exit` 的时候释放会出现莫名其妙的问题，所以只能放在 `wait` 里释放了，不知道这算不算一种我们 OS 特有的僵尸进程……（笑）
 
