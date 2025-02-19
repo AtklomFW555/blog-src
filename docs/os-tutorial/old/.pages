@@ -27,3 +27,4 @@ nav:
     - 25 总结 : 25-the-end.md
     - 26 实现 ANSI 转义序列 : 26-ansi-escape-code.md
     - 27 实现FAT16文件系统（5）——目录支持（未完成） : 27-fat16-directories.md
+    - 28 操作系统何以兼容 : 28-how-to-compat-with-others.md

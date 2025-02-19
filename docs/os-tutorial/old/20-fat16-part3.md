@@ -11,6 +11,7 @@
 typedef enum FILE_TYPE {
     FT_USABLE,
     FT_REGULAR,
+    FT_DIRECTORY,
     FT_UNKNOWN
 } file_type_t;
 
@@ -36,7 +37,7 @@ typedef struct FILE_STRUCT {
 } file_t;
 ```
 
-由于完全不打算实现目录，所以在 `file_type_t` 里，只有 `FT_REGULAR` 一种正常值，剩下两个一个用于判断文件是否已被占用，另一个则没什么用。
+由于还打算实现目录，所以在 `file_type_t` 里，有 `FT_DIRECTORY` 和 `FT_REGULAR` 两种正常值，剩下两个一个用于判断文件是否已被占用，另一个则没什么用。
 
 至于 `O_RDONLY` 这些，则是一个简单的判断读写的小机制，这样可以创建只读以及只写的文件，虽然这没什么用吧。
 

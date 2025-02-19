@@ -92,11 +92,33 @@ typedef struct {
 
 具体所做的工作无非是把 `path_stack_top` 和 `path_stack` 整理到了一个结构体中，然后把代码的主体搬过来了而已。具体的逻辑就是把路径看成一个栈，每次遇到一个 / 就标记一下开始，一直遍历到下一个 / 处结束，这样就把中间这一层给拎出来了。遇到一个 .. ，则进行一个弹栈操作；. 则什么也不做（看似做了点事，其实就是把刚分配的这一层栈又释放掉了）。主要还是得看注释啊（笑）。
 
+上面用到了两个尚未定义的标准库函数 `strcat` 和 `strncpy`，内容如下：
+
+**代码 27-2 `strcat`、`strncpy`（lib/string.c）**
+```c
+char *strcat(char *dst_, const char *src_)
+{
+    char *str = dst_;
+    while (*str++);
+    --str;
+    while((*str++ = *src_++));
+    return dst_;
+}
+
+char *strncpy(char *dst_, const char *src_, int n)
+{
+    char *str = dst_;
+    while (n && (*dst_++ = *src_++)) n--;
+    if (n) while (n--) *dst_++ = '\0';
+    return str;
+}
+```
+
 接下来就是让现有的操作适配目录，用到文件名的一共有 `create`、`open` 和 `delete` 三种操作，但 `write` 要更新文件属性，而这一个过程需要知道父目录，所以实际上有四个操作都需要修改。 ??~~那么是谁不需要修改呢？~~??
 
 这几个过程其实大同小异，但都需要调用 `read_dir_entries`，而它只能读取根目录，这显然是不可接受的，必须立刻进行修改：
 
-**代码 27-2 读取其他目录（fs/fat16.c）**
+**代码 27-3 读取其他目录（fs/fat16.c）**
 ```c
 // 读取一个目录的目录项，使用clustno指定簇号
 fileinfo_t *read_dir_entries(int clustno, int *dir_ents)
@@ -121,7 +143,7 @@ fileinfo_t *read_dir_entries(int clustno, int *dir_ents)
 
 接下来改哪个呢？先改比较好改的 `write`。来到 `fat16_write_file` 的最后几行，替换如下：
 
-**代码 27-3 更新文件属性（fs/fat16.c）**
+**代码 27-4 更新文件属性（fs/fat16.c）**
 ```c
 int fat16_write_file(fileinfo_t *finfo, int pdir_clustno, const void *buf, uint32_t size)
 {
@@ -138,7 +160,7 @@ int fat16_write_file(fileinfo_t *finfo, int pdir_clustno, const void *buf, uint3
 
 把更新文件属性提取出来自然是因为下一个阶段有用，它基本上就是把之前根目录有关的东西改成了任意目录：
 
-**代码 27-4 在任意位置更新文件属性（fs/fat16.c）**
+**代码 27-5 在任意位置更新文件属性（fs/fat16.c）**
 ```c
 void update_file_attr(fileinfo_t *finfo, int pdir_clustno)
 {
@@ -160,7 +182,7 @@ void update_file_attr(fileinfo_t *finfo, int pdir_clustno)
 
 然后呢？然后来处理 `open`。`open` 要处理的边界情况相对较少，代码较短，也有利于我们观察新的模板。直接将原来的 `open` 推倒重来，迎面向我们走来的是适用于三个函数的修改模板：
 
-**代码 27-5 全新的文件操作统一模板（fs/fat16.c）**
+**代码 27-6 全新的文件操作统一模板（fs/fat16.c）**
 ```c
 // 打开文件
 int fat16_open_file(fileinfo_t *finfo, char *filename)
@@ -191,7 +213,7 @@ int fat16_open_file(fileinfo_t *finfo, char *filename)
 
 打开是最简单的，毕竟只需要找到文件就行。
 
-**代码 27-6 打开文件（逻辑部分）（fs/fat16.c）**
+**代码 27-7 打开文件（逻辑部分）（fs/fat16.c）**
 ```c
 int fat16_open_file(fileinfo_t *finfo, char *filename)
 {
@@ -234,7 +256,7 @@ int fat16_open_file(fileinfo_t *finfo, char *filename)
 
 接下来删除比创建要简单些，先做删除：
 
-**代码 27-7 删除文件（逻辑部分）（fs/fat16.c）**
+**代码 27-8 删除文件（逻辑部分）（fs/fat16.c）**
 ```c
 // 删除文件
 int fat16_delete_file(char *filename)
@@ -292,7 +314,7 @@ int fat16_delete_file(char *filename)
 
 最后一部分内容是创建。创建文件不知是不是我想复杂了，行数写得极其多，或许还能化简，还望各位斧正。
 
-**代码 27-8 创建文件（逻辑部分）（fs/fat16.c）**
+**代码 27-9 创建文件（逻辑部分）（fs/fat16.c）**
 ```c
 int fat16_create_file(fileinfo_t *finfo, char *filename)
 {
@@ -384,7 +406,7 @@ int fat16_create_file(fileinfo_t *finfo, char *filename)
 
 把这一部分的代码接入到 `file.c` 是相当顺畅的：首先，在 `file.h` 中找到 `file_t`，新增一个成员：
 
-**代码 27-9 把父目录存一下（fs/file.c）**
+**代码 27-10 把父目录存一下（fs/file.c）**
 ```c
 typedef struct FILE_STRUCT {
     void *handle;
@@ -400,7 +422,7 @@ typedef struct FILE_STRUCT {
 
 然后在 `sys_open` 中，把修改过的 `create` 与 `open` 的返回值存到这个成员里：
 
-**代码 27-10 把父目录存一下（2）（fs/file.c）**
+**代码 27-11 把父目录存一下（2）（fs/file.c）**
 ```c
 int sys_open(char *filename, uint32_t flags)
 {
@@ -413,7 +435,7 @@ int sys_open(char *filename, uint32_t flags)
 
 最后在 `sys_write` 中，给 `fat16_write_file` 传递父目录：
 
-**代码 27-11 把父目录取出来（fs/file.c）**
+**代码 27-12 把父目录取出来（fs/file.c）**
 ```c
 int sys_write(int fd, const void *msg, int len)
 {
@@ -443,8 +465,821 @@ int sys_write(int fd, const void *msg, int len)
 >
 > 4.于是一个空目录就创建出来了。
 
-这几步都在我们的能力范围之内，
+这几步都在我们的能力范围之内，开写。
+
+**代码 27-13 创建空目录（fs/file.c）**
+```c
+int sys_mkdir(const char *path)
+{
+    fileinfo_t finfo; // 待创建目录对应的finfo
+    int pdir_clustno = fat16_create_file(&finfo, (char *) path); // 创建对应文件
+    if (pdir_clustno == -1) return -1; // 已有或有其他妙妙小问题，异常退出
+    if (pdir_clustno == ROOT_DIR_START_LBA - SECTOR_CLUSTER_BALANCE) pdir_clustno = 0; // 不知道在转换什么，反正最终得转换回去
+    char *clust = (char *) kmalloc(512); 
+    int status = fat16_write_file(&finfo, pdir_clustno, clust, 512);
+    kfree(clust);
+    if (status == -1) return -1; // 上面四行分配了一个空簇，finfo.clustno就是这个空簇的簇号
+    fileinfo_t *content = (fileinfo_t *) kmalloc(512); // 这是真正的内容
+    strcpy(content[0].name, ".          "); // 第一个目录项是.，代表当前目录
+    strcpy(content[1].name, "..         "); // 第二个目录项是..，代表父目录
+    content[0].type = content[1].type = 0x10; // 两个东西都是目录
+    content[0].size = content[1].size = 0; // 目录大小都是0
+    content[0].date = content[1].date = finfo.date; // 和目录本身不求同年同月同日生
+    content[0].time = content[1].time = finfo.time; // 但求同年同月同日死
+    content[0].clustno = finfo.clustno; // 当前目录的簇号就是刚才拿到空簇的簇号，反正都是一个扇区，覆盖不会导致新簇加入
+    content[1].clustno = pdir_clustno; // 父目录的簇号上面返回的时候已经拿到了
+    memset(content[0].reserved, 0, 10);
+    memset(content[1].reserved, 0, 10);
+    status = fat16_write_file(&finfo, pdir_clustno, content, 512); // 把这两个目录项写入进去
+    if (status == -1) return -1; // 写入失败则创建失败
+    kfree(content); // 现在不再需要内容
+    finfo.type = 0x10; // 哈哈 其实我是目录
+    finfo.size = 0; // 我根本没有大小
+    update_file_attr(&finfo, pdir_clustno); // 更新文件属性
+    return 0;
+}
+```
+
+感觉把它放到 `fat16.c` 里更合适呢？算了不管了。总之这个流程就是上面的流程，注释也就写得放飞自我一点，各位想必都看得懂代码我也就不管啦。
+
+按照顺序，下一个是删，也就是 `rmdir`。和删除无牵无挂的普通文件相比，目录是拖家带口的，上有老不一定，下有小（目录项）倒是大有可能，只有这个目录也无牵无挂了，我们才能删掉它——也就是说，只有空目录才能 `rmdir`。
+
+空目录里并不是没有目录项，而是还有两个无法删除的目录项（`.` 和 `..`），判空时要尤其注意。而要知道一个目录里到底有几个目录项，最好的办法是直接使用 `read_dir_entries`。
+
+注意到，删除文件用的 `fat16_delete_file` 并不在乎文件属性，所以判断目录为空以后可以直接用它来删除。
+
+**代码 27-14 删除空目录（fs/file.c）**
+```c
+int sys_rmdir(const char *path)
+{
+    if (strcmp(path, "/") == 0) return -1; // 不允许删除根目录
+    fileinfo_t finfo; // 待删除目录对应的finfo
+    memset(&finfo, 0, sizeof(finfo));
+    int pdir_clustno = fat16_open_file(&finfo, (char *) path); // 打开对应文件
+    if (pdir_clustno == -1 || !(finfo.type & 0x10)) {
+        if (is_relative) kfree((char *) path);
+        return -1; // 有妙妙小问题，异常退出
+    }
+    int entries;
+    fileinfo_t *dir_ents = read_dir_entries(finfo.clustno, &entries); // 读取目录项
+    if (entries != 2) {
+        // 只有2个目录项（.和..）才可删除
+        // 被删除的目录项也会被计入，所以要判断一下其他目录项是还在还是被删了
+        int delete_cnt = 0;
+        for (int i = 2; i < entries; i++) {
+            if (dir_ents[i].name[0] == 0xe5) delete_cnt++;
+        }
+        if (entries - delete_cnt != 2) {
+            // 去掉被删的还是多，这是真非空
+            return -1;
+        }
+    }
+    kfree(dir_ents); // 其实只是为了拿到entries
+    // 否则即可删，删除之
+    int ret = fat16_delete_file((char *) path);
+    return ret;
+}
+```
+
+第一行首先判断是不是根目录，显然根目录我们碰都不应该碰。然后抓一个 finfo 过来，并用它装好打开之后的文件标识，如果打开文件返回 -1 或者使用 `rmdir` 删除的文件不是目录，都立即报错退出。再往下确认是目录以后，读取目录项并判断是否为空，如果为空，再去试图删除这个目录。
+
+再往下，是改的操作，所有对普通文件进行操作的东西，都不能且不应该操作目录。具体而言，`unlink` 这个直接操作路径的函数，不应该接受除了普通文件以外的任何文件，在此对它进行修改：
+
+**代码 27-15 文件与目录之辨（fs/file.c）**
+```c
+int sys_unlink(const char *filename)
+{
+    fileinfo_t finfo;
+    int status = fat16_open_file(&finfo, (char *) filename);
+    if (status == -1 || (finfo.type & 0x10)) {
+        if (is_relative) kfree((char *) filename);
+        return -1;
+    }
+    status = fat16_delete_file((char *) filename); // 直接套皮，不多说    
+    return status;
+}
+```
+
+一旦发现对应的文件其实是目录，函数便立刻中止，不再进行后续操作。至于 `open`，Linux 里倒是能用它打开目录，这里也支持一下算了。
+
+注意，根目录没有对应的 `fileinfo_t` 结构，需要在 `open` 中特殊处理：
+
+**代码 27-16 特判根目录（fs/file.c）**
+```c
+    if (!strcmp(filename, "/")) {
+        // 根目录没有对应的fileinfo结构，自然打开什么的都不用管
+        // 直接就地构造一个handle即可
+        strcpy(finfo.name, "root       ");
+        finfo.type = 0x10;
+        finfo.size = 0;
+        finfo.clustno = 0;
+        current_time_t ctime;
+        get_current_time(&ctime); // 获取当前时间
+        // 按照前文所说依次填入date和time
+        finfo.date = ((ctime.year - 1980) << 9) | (ctime.month << 5) | ctime.day;
+        finfo.time = (ctime.hour << 11) | (ctime.min << 5) | ctime.sec;
+        status = 0;
+    } else { // 新增部分到此结束
+        if (flags & O_CREAT) { // flags中含有O_CREAT，则需要创建文件
+            status = fat16_create_file(&finfo, filename); // 调用创建文件的函数
+            if (status == -1) {
+                return status; // 创建失败则直接不管
+            }
+        } else {
+            status = fat16_open_file(&finfo, filename); // 调用打开文件的函数
+            if (status == -1) {
+                return status; // 打开失败则直接不管
+            }
+        }
+    }
+```
+
+由于使用了 `current_time_t` 及附属结构，需要在 `file.c` 开头加上 `#include "cmos.h"`。
+
+最后一步，是查。具体地，是 `opendir`、`readdir`、`rewinddir`、`closedir` 这四个函数。
+
+这几个函数的处理相对而言较为复杂，因为涉及到在操作系统内部操作应用程序的内存。不过只要时刻留意，哪个是给操作系统用的，哪个是给应用程序用的，哪个经过转换，哪个没经过转换，基本上问题也不大。
+
+`opendir` 返回的是一个 `DIR` 结构的指针，`readdir` 则接收一个 `DIR` 结构的指针返回一个 `struct dirent *`，而 `struct dirent *` 总共也没多少东西，显然光靠这四个函数是不够查询目录项的。事实上，真正用来查询一个文件的信息的函数叫做 `stat`，还有变体 `fstat` 等，较为复杂，但获取信息比自己绞尽脑汁去偷（比如经典的偷文件大小）要多。
+
+想要查询一个目录项我得先知道有哪些目录项，所以最终又回到了上面那四个函数。先从一切的起源——`opendir` 开始。
+
+为了方便实现，我把 `DIR` 结构定义成一个 `struct dirent` 的数组，还有一些附加成员比如 `pos` 之类记录已经读到了第几个。
+
+**代码 27-17 目录的抽象表示（include/dirent.h）**
+```c
+#ifndef _DIRENT_H_
+#define _DIRENT_H_
+
+#define MAX_FILE_NUM 512
+
+struct dirent {
+    char name[20]; // 给多了
+    int size;
+};
+
+typedef struct {
+    struct dirent dir_entries[MAX_FILE_NUM]; // 一个目录下最多这么多文件
+    int entry_count; // 总共多少个目录项
+    int pos;
+} DIR;
+
+#endif
+```
+
+新建了一个文件 `dirent.h`，首先是因为标准是这么写的，其次则是很多地方都要用到这个文件，不单分出来也没有办法。
+
+在 `file.h` 的函数声明前面加上 `#include "dirent.h"`，然后就可以开始写 `opendir` 了。
+
+**代码 27-18 打开目录（fs/file.c）**
+```c
+DIR *sys_opendir(const char *name)
+{
+    fileinfo_t *dir_ents;
+    int entries;
+    if (strcmp(name, "/") == 0) {
+        dir_ents = read_dir_entries(ROOT_DIR_START_LBA - SECTOR_CLUSTER_BALANCE, &entries);
+    } else {
+        fileinfo_t finfo; // 待删除目录对应的finfo
+        memset(&finfo, 0, sizeof(finfo));
+        int pdir_clustno = fat16_open_file(&finfo, (char *) name); // 打开对应文件
+        if (pdir_clustno == -1 || !(finfo.type & 0x10)) return NULL; // 有妙妙小问题，异常退出
+        dir_ents = read_dir_entries(finfo.clustno, &entries);
+    }
+    // 总之折腾完后应该是拿到entries了
+    // 为DIR *分配内存需要使用malloc
+    // 笑点解析：sys_opendir(r0) -> malloc(r3) -> sbrk(r3) -> sys_sbrk(r0)
+    DIR *ret = (DIR *) malloc(sizeof(DIR));
+    // 现在是在r0的段 所以ret要加上ds_base才能正确更新到r3的ret里
+    ret = (DIR *) ((char *) ret + (task_now()->ds_base));
+    memset(ret, 0, sizeof(DIR));
+    ret->pos = 0;
+    int ret_entry_index = 0;
+    for (int i = 0; i < entries; i++) {
+        if (dir_ents[i].name[0] == 0xe5) continue;
+        ret->dir_entries[ret_entry_index].size = dir_ents[i].size;
+        int ret_name_index = 0;
+        // 处理文件名
+        for (int j = 0; j < 8; j++) {
+            char alpha = dir_ents[i].name[j];
+            if (alpha == ' ') break;
+            if (alpha >= 'A' && alpha <= 'Z') alpha += 0x20;
+            ret->dir_entries[ret_entry_index].name[ret_name_index++] = alpha;
+        }
+        for (int j = 0; j < 3; j++) {
+            char alpha = dir_ents[i].ext[j];
+            if (alpha == ' ') break;
+            if (j == 0) ret->dir_entries[ret_entry_index].name[ret_name_index++] = '.';
+            if (alpha >= 'A' && alpha <= 'Z') alpha += 0x20;
+            ret->dir_entries[ret_entry_index].name[ret_name_index++] = alpha;
+        }
+        ret_entry_index++;
+    }
+    ret->entry_count = ret_entry_index;
+    // 把ret减回去
+    ret = (DIR *) ((char *) ret - (task_now()->ds_base));
+    // 至此dir初始化完成
+    return ret;
+}
+```
+
+这一段代码总体上可分为两大块：第一块，是获取所有目录项；第二块，是把获取到的目录项转化一下，这里特指转化文件名。
+
+开头 11 行是第一部分的处理，首先判断是不是根目录（因为根目录没有对应的 fileinfo 结构），如果是就直接读根目录，否则按照 finfo 结构里的 clustno 读出目录项。下面调用 `malloc` **在用户空间**分配了一块内存，反正 DIR 指针最后是给用户了，只能调用 malloc。如此一来，明明本来是在内核 r0 级别的 `sys_opendir`，要去调用用户 r3 级别的 `malloc`，之后 `malloc` 再调用 r0 级别的 `sys_sbrk`，真是弯弯绕啊。
+
+接下来为了操控 `ret`，我们还需要让内核能够访问到 `ret`，但 `malloc` 返回的地址是用户空间内的地址，还要加上 `ds_base` 才能为内核所控。`char *` 指针以一字节为基本单位，因此把 `ret` 转换成 `char *` 再加 `ds_base` 就是加 `ds_base` 这么多字节。
+
+接下来的操作只是把 FAT16 认为的 8.3 文件名转换成平常常用的那种文件名，由于中间可能删除了一些项，需要一个 `ret_entry_index` 来单独记录下一个文件信息应该放在哪里。最后给出目录内一共有多少个项，然后把 `ds_base` 减回去，这就初始化完了一个目录的软件结构。
+
+接下来的三个处理 `DIR` 结构的函数加起来还没有上面那一个长：
+
+**代码 27-19 操作目录（fs/file.c）**
+```c
+struct dirent *sys_readdir(DIR *dir)
+{
+    // C语言笑传之查查边
+    if (dir->pos >= dir->entry_count) return NULL;
+    struct dirent *ret = &dir->dir_entries[dir->pos++];
+    ret = (struct dirent *) ((char *) ret - (task_now()->ds_base));
+    return ret;
+}
+
+void sys_rewinddir(DIR *dir)
+{
+    dir->pos = 0;
+}
+
+void sys_closedir(DIR *dir)
+{
+    free((char *) dir - (task_now()->ds_base));
+}
+```
+
+三个部分都很简单。第一个部分读取目录项，只需直接从数组当中取，目录结构中有一个 `pos` 记录读到了哪里，从那读出来再加一即可；开头查了一下边界情况。需要注意的是虽然 `dir` 指针是给我们自动加了一个 `ds_base`，但是返回的 `ret` 指针没有，需要我们自己减掉，应用程序才能知道。第二个部分直接把 `pos` 设置为 0。第三个部分直接 `free` 掉，由于 `free` 本体在用户空间还需要把 `ds_base` 减掉。
+
+最后，为了能让 `ls` 之类的应用程序获取到更多信息，还要再添加一个函数 `stat`。`stat` 是用来获取文件信息的，基本上我们能给什么就给什么。目前，我们能给出的信息也就只有：文件大小、文件最后修改时间、文件属性（也只有是不是目录这一项）这三种。`stat` 还有变体 `fstat` 和 `lstat`，`stat` 和 `lstat` 接收的是文件名，而 `fstat` 接收的是文件描述符；`stat` 与 `lstat` 的区别在我们没实现的符号链接上体现，可以认为二者没有区别。
+
+下面先添加表示文件信息的结构体 `struct stat`：
+
+**代码 27-20 文件信息结构体 `struct stat`（include/fcntl.h、include/time.h）**
+```c
+#ifndef _STAT_H_
+#define _STAT_H_
+
+#include "time.h"
+
+typedef enum FILE_TYPE {
+    FT_USABLE,
+    FT_REGULAR,
+    FT_DIRECTORY,
+    FT_UNKNOWN
+} file_type_t;
+
+typedef enum oflags {
+    O_RDONLY,
+    O_WRONLY,
+    O_RDWR,
+    O_CREAT = 4
+} oflags_t;
+
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+
+struct stat {
+    uint32_t st_size;
+    file_type_t st_type;
+    struct tm st_time;
+};
+
+int stat(const char *filename, struct stat *st);
+
+#endif
+```
+```c
+#ifndef _TIME_H_
+#define _TIME_H_
+
+struct tm {
+    int tm_year, tm_month, tm_mday, tm_hour, tm_min, tm_sec;
+};
+
+#endif
+```
+
+在 `file.h` 中再加一行 `#include "fcntl.h"`，单开一个文件的理由和 `dirent.h` 一致。这里顺便挖了俩东西过来（记得在原来的地方把它删了）又把 `stat` 声明撂在这真没什么意思。
+
+`st_time` 文件夹本应放置时间戳，但因为??我不会??系统目前没有操作时间戳的工具，所以被迫使用了类似的 `struct tm`。
+
+由于 `stat` 最后肯定要打开文件，所以在系统端我们实现的是 `fstat`：
+
+**代码 27-21 获取文件信息用 `sys_fstat`（fs/file.c）**
+```c
+int sys_fstat(int fd, struct stat *st)
+{
+    // 从fd获取fileinfo_t
+    int global_fd = task_now()->fd_table[fd];
+    fileinfo_t *finfo = (fileinfo_t *) file_table[global_fd]->handle;
+    // 向stat结构体填充信息
+    st->st_size = finfo->size;
+    if (finfo->type & 0x10) st->st_type = FT_DIRECTORY;
+    else st->st_type = FT_REGULAR;
+    st->st_time.tm_year = ((finfo->date & 0xfe00) >> 9) + 1980;
+    st->st_time.tm_month = (finfo->date & 0x01e0) >> 5;
+    st->st_time.tm_mday = finfo->date & 0x001f;
+    st->st_time.tm_hour = (finfo->time & 0xf800) >> 11;
+    st->st_time.tm_min = (finfo->time & 0x07e0) >> 5;
+    st->st_time.tm_sec = finfo->time & 0x001f;
+    return 0;
+}
+```
+
+这两步简单直接，不用我多讲了吧。对 `date` 和 `time` 的拆分是第 18 节创建文件时合并的逆过程，请自行参阅，这里不再赘述。
+
+对目录的操作也已完成，但总感觉还差点什么？对了，现在所有的路径都是绝对路径，相对路径还没有实现，赶快进入下一个阶段。
 
 ### 第三阶段：让任务知道目录，实现相对路径
 
-### 第四阶段：实现文件相关应用程序及命令：`ls`、`mkdir`、`pwd`、`touch`、`rm`、`cd`
+相对路径相对路径，总得“相对”点什么东西吧。相对了个啥呢？我们随便打开一个 shell，看看旁边的提示符，不管打扮得多花哨，一般都有一个路径，它有另一个名字，叫做**工作目录**。这个工作目录，说白了就是一个任务认为自己在一个什么路径里。
+
+既然它是每一个任务独有的，自然应该被放在我们用来表示任务的 `task_t` 结构体里：
+
+**代码 27-22 新版任务结构体（include/mtask.h）**
+```c
+typedef struct TASK {
+    uint32_t sel;
+    int32_t flags;
+    exit_retval_t my_retval;
+    int fd_table[MAX_FILE_OPEN_PER_TASK];
+    gdt_entry_t ldt[2];
+    int ds_base;
+    bool is_user;
+    void *brk_start, *brk_end;
+    char *work_dir;
+    tss32_t tss;
+} task_t;
+```
+
+对于这样一个新成员，自然应该在 `task_alloc` 中初始化它：
+
+**代码 27-23 默认工作目录（kernel/mtask.c）**
+```c
+task_t *task_alloc()
+{
+    // 上略
+            task->is_user = false;
+            task->work_dir = kmalloc(5);
+            strcpy(task->work_dir, "/"); // 默认工作目录为根目录
+            return task;
+    // 下略
+}
+```
+
+给所有任务的默认工作目录都是根目录，反正到时候应用程序启动的时候都会重新改。
+
+在实现相对路径有关的所有 API 以前，需要让所有与路径有关的程序首先把相对路径转化为绝对路径。这些程序包括：`open`、`unlink`、`opendir`、`mkdir` 以及 `rmdir`。
+
+下面正式开始转化。其实转化的过程非常简单：第一步，把任务的工作目录和相对路径拼接到一起；第二步，使用 `path_parse` 把它拆成各层，这一步是为了去除多余的 `/` 并且简化 `.` 和 `..`；第三步，把各层再拼起来，就得到了真正的绝对路径。
+
+将以上三步转化成代码，就形成了相对路径转绝对路径的程序 `rel2abs`。
+
+**代码 27-24 相对路径转绝对路径（fs/file.c）**
+```c
+static char *rel2abs(const char *path)
+{
+    char *abspath = (char *) kmalloc(strlen(task_now()->work_dir) + strlen(path) + 5);
+    strcpy(abspath, task_now()->work_dir);
+    strcat(abspath, path);
+    path_stack_t path_stack; path_stack.path_stack_top = 0;
+    path_parse(abspath, &path_stack);
+    memset(abspath, 0, strlen(abspath));
+    abspath[0] = '/';
+    for (int i = 0; i < path_stack.path_stack_top; i++) {
+        strcat(abspath, path_stack.path_stack[i]);
+        strcat(abspath, "/");
+    }
+    // 至此相对路径已转换为绝对路径存储至abspath
+    path_stack_deinit(&path_stack);
+    return abspath;
+}
+```
+
+接下来就是把 `rel2abs` 接入到各个程序中，这一步的关键是确认一个路径是不是相对路径：如果一个路径以 `/` 这个根目录开头，便认为它一定是绝对路径。由于 `rel2abs` 用到 `kmalloc`，如果经过转换则此路径应当被 `kfree`。
+
+给上面提到的这五个程序（再列一遍：`open`、`unlink`、`opendir`、`mkdir` 以及 `rmdir`）都加上一头一尾：
+
+**代码 27-25 处理相对路径转绝对路径（fs/file.c）**
+```c
+{
+    int is_relative = false;
+    // 先处理相对路径
+    if (filename[0] != '/') {
+        is_relative = true;
+        filename = rel2abs(filename);
+    }
+    // 中略...
+    if (is_relative) kfree(filename);
+    // 返回略...
+}
+```
+
+在所有错误退出的地方还要提前判断以便释放资源，这一部分不同函数不一样就不打了。不同的函数变量名还不大一样，有的是 `filename`，有的是 `name`，有的是 `path`，懒得管了，到时候该改的就改。
+
+现在已经实现的函数就都已经实现相对路径了。但是，虽然有了相对路径，却没有修改相对路径的方法，而这归根到底，是对工作目录这个字段进行读写。读使用的 API 是 `getcwd`，写使用的 API 是 `chdir`，我们来逐一实现它。
+
+`getcwd` 的函数签名长这样：
+
+```c
+char *getcwd(char *buf, int len);
+```
+
+由用户给出缓冲区和长度，工作目录的路径就放在这个缓冲区里。当缓冲区为 NULL 时，则认为用户请求操作系统进行 `malloc`；当缓冲区为 NULL 且 `len` 为 0 时，则认为用户让操作系统分配大小合适的缓冲区。`malloc` 得来的缓冲区统一由 `getcwd` 返回。
+
+实现起来细节还不少，先看代码。
+
+**代码 27-26 `getcwd`（fs/file.c）**
+```c
+char *sys_getcwd(char *buf, int size)
+{
+    task_t *task = task_now();
+    buf -= task->ds_base;
+    char *res = buf;
+    if (size && strlen(task->work_dir) >= size) return NULL; // 装不下
+    if (!size && buf) return NULL; // 大小为0又不malloc，你要干什么！
+    if (!buf) {
+        if (size) res = malloc(size);
+        else res = malloc(strlen(task->work_dir) + 5);
+    }
+    res += task->ds_base;
+    strcpy(res, task->work_dir);
+    res -= task->ds_base;
+    return res;
+}
+```
+
+首先因为要给 `buf` 判空，把 `buf` 减掉 `ds_base`。接下来分别判断各类异常情况，但主要就是装不下的情况。然后处理缓冲区为 NULL，这里搞了一个 `res` 变量，它存的是减去 `ds_base` 之后的 `buf`，这样后面 `malloc` 也要加上 `ds_base`，就顺便归到一起了。然后把 `res` 加上 `ds_base`，把工作目录路径复制过去，再减回去让用户能访问到这块内存，最后返回它。
+
+接下来 `chdir` 需要判断一下这个工作目录到底是不是个目录，存不存在：
+
+**代码 27-27 `chdir`（fs/file.c）**
+```c
+int sys_chdir(const char *path)
+{
+    task_t *task = task_now();
+    bool is_relative = false;
+    if (path[0] == '/') {
+        is_relative = true;
+        path = rel2abs(path);
+    }
+    fileinfo_t finfo;
+    int status = fat16_open_file(&finfo, path);
+    if (status == -1 || !(finfo.type & 0x10)) {
+        if (is_relative) kfree(path);
+        return -1;
+    }
+    kfree(task->work_dir);
+    task->work_dir = kmalloc(strlen(path) + 5);
+    strcpy(task->work_dir, path);
+    if (is_relative) kfree(path);
+    return 0;
+}
+```
+
+这个简单到看代码就能理解不用我多说了吧。
+
+差点忘了还有一件事，开始运行新应用程序的时候要设置它的工作目录，这是在 `create_process` 中通过早年预留的 `work_dir` 传递的：
+
+**代码 27-28 设置新任务工作目录（kernel/exec.c）**
+```c
+// 上略...
+    new_task->work_dir = kmalloc(strlen(work_dir) + 5);
+    strcpy(new_task->work_dir, work_dir);
+// 下略...
+```
+
+把这两行放在 `task_run(new_task)` 之前即可。严格来说应该判断一下工作目录存不存在的，但好像没有判断的办法，所以就不管它了。
+
+现在可以说我们对目录的实现已经完整，但这些东西都还没有经过测试。实践出真知，我们来写点应用程序还有命令，用上这些操作，结束本节内容。
+
+### 第四阶段：实现文件相关应用程序及命令：`ls`、`mkdir`、`pwd`、`rm`、`cd`
+
+既然提到应用程序还有命令，这些都是用户层的东西，上面实现了一堆 `sys_xxx`，但到头来一个系统调用都没添加。正好借着这个机会，把系统调用一块再小小修改一下：既然 `syscall_impl.asm` 里的函数到最后都是在套公式，那还不如直接写成宏算了。
+
+新版的 `syscall_impl.asm` 长这样。这比以往应该简单多了吧……
+
+**代码 27-29 系统调用小改（kernel/syscall_impl.asm）**
+```asm
+section .text
+
+%macro SYSCALL0 2
+[global %1]
+%1:
+    mov eax, %2
+    int 80h
+    ret
+%endmacro
+
+%macro SYSCALL1 2
+[global %1]
+%1:
+    push ebx
+    mov eax, %2
+    mov ebx, [esp + 8]
+    int 80h
+    pop ebx
+    ret
+%endmacro
+
+%macro SYSCALL2 2
+[global %1]
+%1:
+    push ebx
+    mov eax, %2
+    mov ebx, [esp + 8]
+    mov ecx, [esp + 12]
+    int 80h
+    pop ebx
+    ret
+%endmacro
+
+%macro SYSCALL3 2
+[global %1]
+%1:
+    push ebx
+    mov eax, %2
+    mov ebx, [esp + 8]
+    mov ecx, [esp + 12]
+    mov edx, [esp + 16]
+    int 80h
+    pop ebx
+    ret
+%endmacro
+
+SYSCALL0 getpid, 0
+SYSCALL3 write, 1
+SYSCALL3 read, 2
+SYSCALL2 open, 3
+SYSCALL1 close, 4
+SYSCALL3 lseek, 5
+SYSCALL1 unlink, 6
+SYSCALL3 create_process, 7
+SYSCALL1 waitpid, 8
+SYSCALL1 exit, 9
+SYSCALL1 sbrk, 10
+SYSCALL1 opendir, 11
+SYSCALL1 readdir, 12
+SYSCALL1 rewinddir, 13
+SYSCALL1 closedir, 14
+SYSCALL1 mkdir, 15
+SYSCALL1 rmdir, 16
+SYSCALL2 fstat, 17
+SYSCALL1 chdir, 18
+SYSCALL2 getcwd, 19
+```
+
+`SYSCALL` 系列宏的第一个参数是系统调用名，第二个参数是系统调用号。而 `SYSCALL` 后面的那个数字，代表这个系统调用接收的参数数量。以后添加系统调用，不用再费事打代码，一行 `SYSCALLx name, id` 完事。
+
+接下来在 `syscall.c` 中添加调用它们的代码。
+
+**代码 27-30 添加新系统调用（kernel/syscall.c）**
+```c
+// 上略...
+        case 11:
+            ret = (int) sys_opendir((char *) ((const char *) ebx + ds_base));
+            break;
+        case 12:
+            ret = (int) sys_readdir((DIR *) ((const char *) ebx + ds_base));
+            break;
+        case 13:
+            sys_rewinddir((DIR *) ((const char *) ebx + ds_base));
+            break;
+        case 14:
+            sys_closedir((DIR *) ebx);
+            break;
+        case 15:
+            ret = sys_mkdir((const char *) ebx + ds_base);
+            break;
+        case 16:
+            ret = sys_rmdir((const char *) ebx + ds_base);
+            break;
+        case 17:
+            ret = sys_fstat(ebx, (struct stat *) ((char *) ecx + ds_base));
+            break;
+        case 18:
+            ret = sys_chdir((const char *) ebx + ds_base);
+            break;
+        case 19:
+            ret = (int) sys_getcwd((char *) ebx + ds_base, ecx);
+            break;
+// 下略...
+```
+
+想必我不说大家也应该知道这些东西应该放在哪（
+
+对了，记得在 `unistd.h` 里加上函数声明，还要 include 两个头文件，懒得改的直接抄下面的这个：
+
+**代码 27-31 系统调用列表（include/unistd.h）**
+```c
+#ifndef _UNISTD_H_
+#define _UNISTD_H_
+
+#include "stdint.h"
+#include "dirent.h"
+#include "fcntl.h"
+
+int open(char *filename, uint32_t flags);
+int write(int fd, const void *msg, int len);
+int read(int fd, void *buf, int count);
+int close(int fd);
+int lseek(int fd, int offset, uint8_t whence);
+int unlink(const char *filename);
+int waitpid(int pid);
+int exit(int ret);
+void *sbrk(int incr);
+DIR *opendir(const char *name);
+struct dirent *readdir(DIR *dir);
+void rewinddir(DIR *dir);
+void closedir(DIR *dir);
+int mkdir(const char *path);
+int rmdir(const char *path);
+int fstat(int fd, struct stat *st);
+int chdir(const char *path);
+char *getcwd(char *buf, int size);
+
+int create_process(const char *app_name, const char *cmdline, const char *work_dir);
+
+#endif
+```
+
+只有系统调用方可在列，通过标准库实现的都不算。说到标准库，是时候实现 `stat` 了：
+
+**代码 27-32 实现 `stat`（lib/stat.c）**
+```c
+#include "unistd.h"
+
+int stat(const char *filename, struct stat *st)
+{
+    int fd = open((char *) filename, O_RDWR);
+    if (fd == -1) return -1;
+    int ret = fstat(fd, st);
+    close(fd);
+    return ret;
+}
+```
+
+有了 `fstat` 打底，剩下的都不用管，打开完了把 fd 给过去就行了。这就把上面写的所有程序都暴露给用户了。
+
+至此，一锤定音。
+
+尘埃，已然落定。
+
+给 Makefile 的 `LIBC_OBJECTS` 那行加上 `out/stat.o`，把 `stat` 链接进标准库。终于，可以开始写用户程序了。
+
+`cd` 是集成在 shell 里的内部命令，正好 shell 还有别的要改，先把 shell 改了。还记得前面提到的提示符里显示工作目录路径吗？其实在第 16 节写 shell 的时候就已经把它留出来了，那时候只是有个 `/`，现在可真要拿它显示工作目录了。
+
+修改输出提示符部分如下：
+
+**代码 27-33 提示符输出工作目录路径（apps/shell.c）**
+```c
+static char *cwd_cache = NULL;
+ 
+static void print_prompt() // 输出提示符
+{
+    printf("[TUTO@localhost %s] $ ", cwd_cache); // 这一部分大家随便改，你甚至可以改成>>>
+}
+```
+
+新加了一个 `cwd_cache` 变量，它就是用来存当前工作目录的。一直 `getcwd` 也不太好，还是缓存着，到 `cd` 的时候再改。
+
+然后来添加一个内部命令 `cd`，改变 shell 的当前工作目录：
+
+**代码 27-34 更改 shell 的当前工作目录（apps/shell.c）**
+```c
+void cmd_cd(int argc, char **argv)
+{
+    if (chdir(argv[1]) == -1) printf("cd: invalid path\n");
+    else {
+        free(cwd_cache);
+        cwd_cache = getcwd(NULL, 0);
+    }
+}
+```
+
+第一行在 `chdir` 的同时判断返回值，算是一个常见的技巧。接下来如果 `chdir` 成功，那么就更新 `cwd_cache`。由于 `getcwd` 用 `malloc` 分配内存，这里可以安全地用 `free` 释放。算上函数的包边，也就八行就把 cd 写完了。添加一个内部命令的流程希望大家都还会，不会的话赶紧回第 16 节复习去。
+
+最后，`cwd_cache` 需要一个初始值，在进入无限循环前更新一下：`cwd_cache = getcwd(NULL, 0);` 即可。
+
+工作目录的变化目前没有反映到新的任务上来，因为 `create_process` 的参数还是默认的 `/`，把它们都改成 `cwd_cache`，对 shell 的修改就此结束。
+
+剩下的几个程序，从易到难排序的话，应该是 `pwd`、`rm`、`mkdir`、`ls`。先从简单的开始。
+
+`pwd`，是 **p**rint **w**orking **d**irectory 的缩写，可不是什么 **p**ass**w**or**d**。它是用来输出工作目录的。
+
+那这程序可太简单了，请看 VCR：
+
+**代码 27-35 输出工作目录的程序 `pwd`（apps/pwd.c）**
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stddef.h>
+#include <unistd.h>
+
+int main()
+{
+    char *cwd = getcwd(NULL, 0);
+    puts(cwd);
+    free(cwd);
+    return 0;
+}
+```
+
+开头叠了一堆甲没绷住。主体部分就是下面那几行，我都懒得说了。
+
+接下来的三个程序，难度断崖式增长，一个比一个难，一个比一个细节多，一个比一个更不像是一个操作系统教程里应该出现的东西。
+
+先来看 `rm`。`rm` 本体并不难，难的是它的 `-r` 选项，它的功能是递归删除一个目录下的所有文件。说是难，其实还是细节比较多而已。看看代码吧：
+
+**代码 27-36 删除文件的程序 `rm`（apps/rm.c）**
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stddef.h>
+#include <unistd.h>
+
+int recursive = 0;
+
+void rm_recursive(char *path)
+{
+    struct stat st;
+    memset(&st, 0, sizeof(st));
+    DIR *dir = opendir(path);
+    struct dirent *ent = NULL;
+    while ((ent = readdir(dir)) != NULL) {
+        if (!strcmp(ent->name, ".") || !strcmp(ent->name, "..")) continue;
+        char *new_path = malloc(strlen(ent->name) + strlen(path) + 5);
+        strcpy(new_path, path);
+        strcat(new_path, "/");
+        strcat(new_path, ent->name);
+        int status = stat(new_path, &st);
+        if (status == -1) {
+            printf("rm: error: file `%s` not exist\n", new_path);
+            continue;
+        }
+        if (st.st_type == FT_DIRECTORY) {
+            rm_recursive(new_path);
+        } else {
+            status = unlink(new_path);
+            if (status == -1) {
+                printf("rm: error: error deleting file `%s`", new_path);
+                continue;
+            }
+        }
+        free(new_path);
+    }
+    closedir(dir);
+    int status = rmdir(path);
+    if (status == -1) printf("rm: error: cannot delete directory `%s`\n", path);
+}
+
+int main(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("rm: error: no arguments\n");
+        return 1;
+    }
+    recursive = !strcmp(argv[1], "-r");
+    int status;
+    struct stat st;
+    for (int i = 1; i < argc; i++) {
+        if (i == 1 && !strcmp(argv[1], "-r")) continue;
+        status = stat(argv[i], &st);
+        if (status == -1) {
+            printf("rm: error: path `%s` does not exist\n", argv[i]);
+            continue;
+        }
+        if (st.st_type == FT_REGULAR) {
+            status = unlink(argv[i]);
+            if (status == -1) {
+                printf("rm: error: unknown error when deleting `%s`\n", argv[i]);
+                continue;
+            }
+        } else if (!recursive && st.st_type == FT_DIRECTORY) {
+            printf("rm: error: path `%s` is a directory; use `-r` flag to remove it\n", argv[i]);
+            continue;
+        } else {
+            rm_recursive(argv[i]);
+        }
+    }
+    return 0;
+}
+```
+
+一共 70 多行，全是应用知识，没有底层知识，理论上有过一定 Linux 开发经验的都能读懂（确信）。
+
+快速跳过开头咏唱，第一个函数 `rm_recursive` 顾名思义，就是用来递归删除一个路径对应的目录里的所有文件的（包括这个目录本体）。首先定义一个 `struct stat` 结构并把它清空，然后用 `opendir` 打开，再进入 `readdir` 读取循环。跳过一开头的 `.` 和 `..` 目录项，然后把现在的 `path` 和读到目录项的名字 `ent->name` 连接成新的路径 `new_path`。然后，调用 `stat` 获取它的信息，返回 -1 代表文件不存在，如果文件类型是目录那就进入这一个路径进行递归，如果文件类型是普通文件那就调用 `unlink` 删除即可。
+
+下面主程序首先判断 `argc` 是否小于 2，小于则说明参数有问题不进行后续操作，大于等于 2 则至少有一个参数，可以用 `argv[1]` 安全读取。这里判断 `argv[1]` 是否与 `-r` 相等是为了确认是否需要递归。然后开始遍历参数，跳过第一个 `-r`，对于接下来的每一个参数都执行 `stat`，是文件则直接 `unlink`，是目录则先判断能不能递归，如果能递归就调用 `rm_recursive`，否则报错无法删除目录。
+
+下一个是 `mkdir`，用来创建目录，同样它的难度也不在于此而是在它的 `-p` 选项，意思是如果中间缺层就逐层创建。
