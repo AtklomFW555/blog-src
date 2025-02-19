@@ -927,7 +927,7 @@ int sys_chdir(const char *path)
 {
     task_t *task = task_now();
     bool is_relative = false;
-    if (path[0] == '/') {
+    if (path[0] != '/') {
         is_relative = true;
         path = rel2abs(path);
     }
@@ -951,13 +951,20 @@ int sys_chdir(const char *path)
 
 **代码 27-28 设置新任务工作目录（kernel/exec.c）**
 ```c
-// 上略...
-    new_task->work_dir = kmalloc(strlen(work_dir) + 5);
-    strcpy(new_task->work_dir, work_dir);
-// 下略...
+void app_entry(const char *app_name, const char *cmdline, const char *work_dir)
+{
+    // 上略...
+    task_now()->brk_end = (void *) last - first + 5 * 1024 * 1024 - 1;
+    // 把工作目录换了
+    sys_chdir(work_dir); // 这一行是新增的
+    // 接下来把cmdline传给app，解析工作由CRT完成
+    // 这样我就不用管怎么把一个char **放到栈里了（（（（
+    int prev_brk = (int) sys_sbrk(0); // 现在的brk位置
+    // 下略...
+}
 ```
 
-把这两行放在 `task_run(new_task)` 之前即可。严格来说应该判断一下工作目录存不存在的，但好像没有判断的办法，所以就不管它了。
+严格来说应该判断一下工作目录是否存在的，但现在就先不管它了，反正不存在也没啥大事。
 
 现在可以说我们对目录的实现已经完整，但这些东西都还没有经过测试。实践出真知，我们来写点应用程序还有命令，用上这些操作，结束本节内容。
 
@@ -1282,4 +1289,327 @@ int main(int argc, char **argv)
 
 下面主程序首先判断 `argc` 是否小于 2，小于则说明参数有问题不进行后续操作，大于等于 2 则至少有一个参数，可以用 `argv[1]` 安全读取。这里判断 `argv[1]` 是否与 `-r` 相等是为了确认是否需要递归。然后开始遍历参数，跳过第一个 `-r`，对于接下来的每一个参数都执行 `stat`，是文件则直接 `unlink`，是目录则先判断能不能递归，如果能递归就调用 `rm_recursive`，否则报错无法删除目录。
 
-下一个是 `mkdir`，用来创建目录，同样它的难度也不在于此而是在它的 `-p` 选项，意思是如果中间缺层就逐层创建。
+下一个是 `mkdir`，用来创建目录，同样它的难度也不在于功能本身而是在它的 `-p` 选项，意思是如果中间缺层就逐层创建。这需要我们从内核把路径解析偷过来：
+
+**代码 27-37 创建目录用 `mkdir`（apps/mkdir.c）**
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stddef.h>
+#include <unistd.h>
+
+char *path = NULL;
+int auto_create = 0;
+
+typedef struct {
+    int path_stack_top;
+    char **path_stack;
+} path_stack_t;
+
+// 路径解析
+void path_parse(char *path, path_stack_t *path_stack)
+{
+    path_stack->path_stack_top = 0; // 设置栈顶为0
+    path_stack->path_stack = (char **) malloc(strlen(path) * sizeof(char *)); // 初始化栈
+    if (path[0] != '/') { // 第一个不是/，对后续处理会有影响
+        char *new_path = (char *) malloc(strlen(path) + 5); // 从今天起你就是新的path了
+        strcpy(new_path, "/"); // 先复制一个/
+        strcat(new_path, path); // 再把后续的路径拼接上
+        path = new_path; // 夺舍
+    }
+    char *level_start = path; // 当前路径层级的起始
+    char *level_end = level_start + 1; // 当前路径层级的结尾
+    while (*level_end) { // 直到还没到结尾
+        while (*level_end != '/' && *level_end) {
+            level_end++; // 遍历直到抵达`/`
+        }
+        int level_len = level_end - level_start; // 这一级路径的长度（前/计后/不计）
+        if (level_len == 1) { // 如果就只有后面的一个/
+            level_start = level_end; // start变为现在的end
+            level_end = level_start + 1; // end变为现在的start+1
+            continue; // 下一层
+        }
+        path_stack->path_stack[path_stack->path_stack_top] = malloc(level_len); // 初始化这一层路径栈
+        char *p = level_start + 1; // 跳过本层路径一开始的/
+        strncpy(path_stack->path_stack[path_stack->path_stack_top], p, level_len - 1); // 将本层路径拷入路径栈，只拷level_len - 1（去掉一开头的/）的长度
+        if (!strcmp(path_stack->path_stack[path_stack->path_stack_top], "..")) { // 如果是..
+            free(path_stack->path_stack[path_stack->path_stack_top]); // 首先释放新的这一层
+            path_stack->path_stack_top--; // 然后弹栈
+            free(path_stack->path_stack[path_stack->path_stack_top]); // 然后旧的那一层也就可以释放了
+            if (path_stack->path_stack_top < 0) path_stack->path_stack_top = 0; // 如果都弹到结尾了，那你还真是nb，避免溢出
+        } else if (!strcmp(path_stack->path_stack[path_stack->path_stack_top], ".")) {
+            free(path_stack->path_stack[path_stack->path_stack_top]); // 如果是.，那就相当于白压了，释放即可
+        } else path_stack->path_stack_top++; // 否则就正常入栈
+        if (!*level_end) break; // 如果已经到达结尾，直接break，不要指望一开始的while
+        level_start = level_end; // start变为现在的end
+        level_end = level_start + 1; // end变为start+1
+    }
+}
+
+// 回收path_stack
+void path_stack_deinit(path_stack_t *path_stack)
+{
+    for (int i = 0; i < path_stack->path_stack_top; i++) free(path_stack->path_stack[i]);
+    free(path_stack->path_stack);
+}
+
+int main(int argc, char **argv)
+{
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-p") == 0) auto_create = 1;
+        else {
+            if (!path) path = malloc(strlen(argv[i]) + 5);
+            else {
+                puts("mkdir: error: multiple paths");
+                return 1;
+            }
+            strcpy(path, argv[i]);
+        }
+    }
+    int status = mkdir(path);
+    struct stat st;
+    if (status == -1 && auto_create) {
+        path_stack_t stack;
+        path_parse(path, &stack);
+        char *total_path_til_now = (char *) malloc(strlen(path) + 5);
+        strcpy(total_path_til_now, "/");
+        for (int i = 0; i < stack.path_stack_top; i++) {
+            strcat(total_path_til_now, stack.path_stack[i]);
+            strcat(total_path_til_now, "/");
+            status = stat(total_path_til_now, &st);
+            if (status == -1) {
+                status = mkdir(total_path_til_now);
+                if (status == -1) {
+                    printf("mkdir: error: error when creating directory `%s`\n", total_path_til_now);
+                    free(total_path_til_now);
+                    free(path);
+                    path_stack_deinit(&stack);
+                    return 1;
+                }
+            } else if (st.st_type == FT_REGULAR) {
+                printf("mkdir: error: path `%s` is a file\n", total_path_til_now);
+                free(total_path_til_now);
+                free(path);
+                path_stack_deinit(&stack);
+                return 1;
+            }
+        }
+        path_stack_deinit(&stack);
+        free(total_path_til_now);
+    } else if (status == -1) {
+        status = stat(path, &st);
+        if (st.st_type == FT_REGULAR) {
+            printf("mkdir: error: path `%s` is a file\n", path);
+            free(path);
+            return 1;
+        } else {
+            printf("mkdir: error: cannot create directory `%s`; add -p argument instead\n", path);
+            free(path);
+            return 1;
+        }
+    }
+    free(path);
+    return 0;
+}
+```
+
+比 `rm` 还要长上一些。跳过开头咏唱和偷过来的目录解析，剩下所有的逻辑全都写在了 `main` 里。首先是一个小的参数处理，确认是否需要自动创建目录，并且把路径分离出来。接下来直接尝试 `mkdir`，成功了自然很好，若不成功，则进行路径解析，还创建了一个 `total_path_til_now` 记录目前已经拼出来的路径。接下来先把这一层路径拼上去，然后对这一层目录进行 `stat` 先判断存不存在，不存在就创建，存在但是文件就报错，否则就不管。如果不能逐层创建，同样要 `stat`，如果路径存在则只能是普通文件报错，否则就是有一堆层但是没加 `-p` 这里提示一下。
+
+最后终于到了 `ls`。
+
+**代码 27-38 列出目录下文件 `ls`（apps/ls.c）**
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stddef.h>
+#include <unistd.h>
+
+char *path = NULL;
+int more = 0;
+
+void print_02d(int num)
+{
+    putchar(num / 10 + '0');
+    putchar(num % 10 + '0');
+}
+
+int main(int argc, char **argv)
+{
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-l") == 0) more = 1;
+        else {
+            if (!path) path = malloc(strlen(argv[i]) + 5);
+            else {
+                puts("ls: error: multiple paths");
+                return 1;
+            }
+            strcpy(path, argv[i]);
+        }
+    }
+    if (!path) {
+        path = malloc(5); strcpy(path, ".");
+    }
+    // 拿到path后先stat它
+    struct stat st;
+    int status = stat(path, &st);
+    if (status == -1) {
+        printf("ls: error: path `%s` does not exist\n");
+        free(path);
+        return 1;
+    }
+    int len = strlen(path);
+    if (st.st_type == FT_REGULAR) {
+        // 普通文件，好办
+        char *last_layer = path + len;
+        while (*last_layer != '/') last_layer--;
+        if (*last_layer == '/') last_layer++;
+        if (!more) {
+            puts(last_layer);
+        } else {
+            printf("%s", last_layer);
+            for (int i = len; i <= 12; i++) putchar(' ');
+            printf("<FILE>     ");
+            printf("%d-", st.st_time.tm_year); // year
+            print_02d(st.st_time.tm_month); // month
+            putchar('-');
+            print_02d(st.st_time.tm_mday); // day
+            putchar(' ');
+            print_02d(st.st_time.tm_hour); // hour
+            putchar(':');
+            print_02d(st.st_time.tm_min); // min
+            putchar(':');
+            print_02d(st.st_time.tm_sec); // sec
+            printf("      %d Bytes\n", st.st_size);
+        }
+    } else {
+        // 目录，不大好办
+        DIR *dir = opendir(path);
+        struct dirent *ent = NULL;
+        while ((ent = readdir(dir)) != NULL) {
+            char *new_path = malloc(strlen(path) + strlen(ent->name) + 5);
+            strcpy(new_path, path);
+            strcat(new_path, "/");
+            strcat(new_path, ent->name);
+            status = stat(new_path, &st);
+            free(new_path);
+            if (!more) {
+                puts(ent->name);
+            } else {
+                int len = printf("%s", ent->name);
+                for (int i = len; i <= 12; i++) putchar(' ');
+                if (st.st_type == FT_DIRECTORY) printf("<DIR>      ");
+                else printf("<FILE>     ");
+                printf("%d-", st.st_time.tm_year); // year
+                print_02d(st.st_time.tm_month); // month
+                putchar('-');
+                print_02d(st.st_time.tm_mday); // day
+                putchar(' ');
+                print_02d(st.st_time.tm_hour); // hour
+                putchar(':');
+                print_02d(st.st_time.tm_min); // min
+                putchar(':');
+                print_02d(st.st_time.tm_sec); // sec
+                if (st.st_type == FT_REGULAR) printf("      %d Bytes", st.st_size);
+                putchar('\n');
+            }
+        }
+        closedir(dir);
+    }
+    free(path);
+    return 0;
+}
+```
+
+一样跳过开头咏唱，`print_02d` 是为了替代 `printf("%02d")` 引入的，输出两位数的时候用它会在高位补零。`main` 的开头依旧是参数处理，确认是不是有 `-l` 并且分离出要 `ls` 的路径。接下来直接 `stat` 这个路径，一看存不存在，二看是不是文件，三看是不是目录。如果不存在，报个错；如果是普通文件，那就依据有没有 `-l` 输出简略信息（只有从路径最后一层择出来的文件名）或详细信息；如果是目录，那就 `opendir` 它然后进入 `readdir`，依次 `stat` 每一个目录项，然后再依据有没有 `-l` 输出简略信息或详细信息。
+
+至此，终于完成了对于目录的所有更改，鼓掌！由于改动太大，贴出新的 Makefile：
+
+**代码 27-39 新版 Makefile（Makefile）**
+```makefile
+OBJS = out/kernel.o out/main.o out/common.o out/monitor.o out/gdtidt.o out/nasmfunc.o out/isr.o out/interrupt.o \
+	 out/string.o out/timer.o out/memory.o out/mtask.o out/keyboard.o out/keymap.o out/fifo.o out/syscall.o out/syscall_impl.o \
+	 out/stdio.o out/kstdio.o out/hd.o out/fat16.o out/cmos.o out/file.o out/exec.o out/elf.o out/malloc.o out/ansi.o out/hrb_syscall.o
+
+APPS = out/test_c.bin out/test2.bin out/shell.bin out/c4.bin out/colorful.bin out/blackcat.bin out/ls.bin out/mkdir.bin out/pwd.bin out/rm.bin
+
+LIBC_OBJECTS = out/syscall_impl.o out/stdio.o out/string.o out/malloc.o out/stat.o
+
+CC = i686-elf-gcc
+AS = nasm
+CFLAGS = -c -I include -O0 -fno-builtin -fno-stack-protector
+ASMKFLAGS = -f elf
+ASMBFLAGS = -I boot/include
+
+out/%.o : kernel/%.c
+	$(CC) $(CFLAGS) -o out/$*.o kernel/$*.c
+
+out/%.o : kernel/%.asm
+	$(AS) $(ASMKFLAGS) -o out/$*.o kernel/$*.asm
+
+out/%.o : lib/%.c
+	$(CC) $(CFLAGS) -o out/$*.o lib/$*.c
+
+out/%.o : lib/%.asm
+	$(AS) $(ASMKFLAGS) -o out/$*.o lib/$*.asm
+
+out/%.o : drivers/%.c
+	$(CC) $(CFLAGS) -o out/$*.o drivers/$*.c
+
+out/%.o : drivers/%.asm
+	$(AS) $(ASMKFLAGS) -o out/$*.o drivers/$*.asm
+
+out/%.o : fs/%.c
+	$(CC) $(CFLAGS) -o out/$*.o fs/$*.c
+
+out/%.o : fs/%.asm
+	$(AS) $(ASMKFLAGS) -o out/$*.o fs/$*.asm
+
+out/%.bin : boot/%.asm
+	$(AS) -I boot/include -o out/$*.bin boot/$*.asm
+
+out/kernel.bin : $(OBJS)
+	i686-elf-ld -s -Ttext 0x100000 -o out/kernel.bin $(OBJS)
+
+out/%.bin : apps/%.asm
+	$(AS) $(ASMKFLAGS) apps/$*.asm -o out/$*.o
+	i686-elf-ld -s -Ttext 0x0 -o out/$*.bin out/$*.o
+
+out/tulibc.a : $(LIBC_OBJECTS)
+	i686-elf-ar rcs out/tulibc.a $(LIBC_OBJECTS)
+
+out/%.bin : apps/%.c apps/start.c out/tulibc.a
+	$(CC) $(CFLAGS) apps/start.c -o out/start.o -fno-builtin
+	$(CC) $(CFLAGS) apps/$*.c -o out/$*.o -fno-builtin
+	i686-elf-ld -s -Ttext 0x0 -o out/$*.bin out/$*.o out/start.o out/tulibc.a
+
+hd.img : out/boot.bin out/loader.bin out/kernel.bin $(APPS)
+	ftimage hd.img -size 80 -bs out/boot.bin
+	ftcopy hd.img -srcpath out/loader.bin -to -dstpath /loader.bin 
+	ftcopy hd.img -srcpath out/kernel.bin -to -dstpath /kernel.bin
+	ftcopy hd.img -srcpath out/test_c.bin -to -dstpath /test_c.bin
+	ftcopy hd.img -srcpath out/test2.bin -to -dstpath /test2.bin
+	ftcopy hd.img -srcpath out/shell.bin -to -dstpath /shell.bin
+	ftcopy hd.img -srcpath out/c4.bin -to -dstpath /c4.bin
+	ftcopy hd.img -srcpath apps/c4.c -to -dstpath /apps/c4.c
+	ftcopy hd.img -srcpath apps/test_c.c -to -dstpath /apps/test_c.c
+	ftcopy hd.img -srcpath out/colorful.bin -to -dstpath /colorful.bin
+	ftcopy hd.img -srcpath out/blackcat.bin -to -dstpath /blackcat.bin
+	ftcopy hd.img -srcpath out/pwd.bin -to -dstpath /pwd.bin
+	ftcopy hd.img -srcpath out/rm.bin -to -dstpath /rm.bin
+	ftcopy hd.img -srcpath out/mkdir.bin -to -dstpath /mkdir.bin
+	ftcopy hd.img -srcpath out/ls.bin -to -dstpath /ls.bin
+
+run : hd.img
+	qemu-system-i386 -hda hd.img -m 512
+
+clean :
+	cmd /c del /f /s /q out
+
+default : clean run
+```
+
+Makefile 也有一些变化，除了编译、写入了一些新应用程序外，还引入了一些新变量以便转换工具链，具体的还请各位去读了。
+
+具体的测试交给诸位，如果发现在执行过程中速度堪忧，那是正常现象，`stat` 不知为什么是一个极慢的函数。总之，能用就行，理解万岁，本节到此结束。
