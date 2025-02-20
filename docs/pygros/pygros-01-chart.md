@@ -172,7 +172,7 @@ def parse_chart_zip(filename):
 
 以下将会再各提供一个使用 `info.csv` 和无 `info` 文件的谱面（后者多为手工打包得来）。
 
-[使用 info.csv 的谱面（2022 愚人节）](Spasmodic (Haocore Mix).zip)
+[使用 info.csv 的谱面（2022 愚人节）](https://wwti.lanzoub.com/i0X6i2oenkva)
 
 [无 info 文件的谱面（Ποσειδών AT）](Ποσειδών.zip)
 
