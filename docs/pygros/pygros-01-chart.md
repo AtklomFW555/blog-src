@@ -174,7 +174,7 @@ def parse_chart_zip(filename):
 
 [使用 info.csv 的谱面（2022 愚人节）](https://wwti.lanzoub.com/i0X6i2oenkva)
 
-[无 info 文件的谱面（Ποσειδών AT）](Ποσειδών.zip)
+[无 info 文件的谱面（Ποσειδών AT）](https://wwzw.lanzoub.com/b00y9vyfje)
 
 使用 `info.csv` 的情况更为简易，因为 Python 有解析 `csv` 的内置库，已在代码 1-1 中导入了。
 
