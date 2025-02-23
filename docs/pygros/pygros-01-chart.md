@@ -45,7 +45,7 @@ import json
 import io
 
 music_format = ('.ogg', '.wav', '.mp3')
-image_format = ('.jpg', '.png')
+image_format = ('.jpg', '.png', '.jpeg')
 
 def parse_chart_zip(filename):
     f = zipfile.ZipFile(filename)
@@ -172,7 +172,7 @@ def parse_chart_zip(filename):
 
 以下将会再各提供一个使用 `info.csv` 和无 `info` 文件的谱面（后者多为手工打包得来）。
 
-[使用 info.csv 的谱面（2022 愚人节）](https://wwti.lanzoub.com/i0X6i2oenkva)
+[使用 info.csv 的谱面（2022 愚人节）](https://wwti.lanzoub.com/ir8lR2ohex9a)
 
 [无 info 文件的谱面（Ποσειδών AT）](https://wwzw.lanzoub.com/b00y9vyfje)
 
@@ -259,7 +259,7 @@ IEO SP：
 2022 愚人节：
 
 ```plain
-{'name': 'Spasmodic(Haocore Mix)', 'song': 'SpasmodicSP.ogg', 'illustration': 'SpasmodicSP.png', 'chart': 'SpasmodicSP.json', 'level': 'SP\u2002Lv.?', 'composer': 'UK', 'charter': 'Phigros Spasming Team "無極病院"', 'illustrator': '笔记RE'}
+{'name': 'Spasmodic(Haocore Mix)', 'song': 'Spasmodic (Haocore Mix).wav', 'illustration': 'SpasmodicSP.png', 'chart': 'SpasmodicSP.json', 'level': 'SP\u2002Lv.?', 'composer': 'UK', 'charter': 'Phigros Spasming Team "無極病院"', 'illustrator': '笔记RE'}
 ```
 
 波塞冬 AT：
@@ -268,4 +268,69 @@ IEO SP：
 {'name': 'UK', 'song': 'Ποσειδών.wav', 'illustration': '▓¿╚√╢¼.png', 'chart': 'chart ▓¿╚√╢¼.json', 'level': '???', 'composer': 'UK', 'charter': 'UK', 'illustrator': 'UK'}
 ```
 
-因为编码问题所以波塞冬 AT 的文件名乱了，不过总体上问题不大。至此第一节就可以结束了。
+因为编码问题所以波塞冬 AT 的文件名乱了，不过总体上问题不大。
+
+然而，这仅仅是因为波塞冬 AT 运气好，没有 `info.txt`，所以从 `namelist` 里找的，才刚好能对上。一个有 `info.txt` 且编码会出问题的谱面如下：
+
+[2023 愚人节](https://wwti.lanzoub.com/iueVU2omawne)
+
+在这个压缩文件中（以及更多可能会出问题的文件中），文件名的编码是 GBK，但 `zipfile` 只认 `utf-8`，否则会把其他编码的字符都转换成 `cp437`。我们也要做类似的操作，`song`、`illustration` 和 `chart` 与文件有关，要在赋值的结尾加上一行 `.encode('gbk').decode('cp437')`，这样就解决了上面出现的问题。
+
+解析谱面 zip 的完整代码如下：
+
+```python
+def parse_chart_zip(filename):
+    f = zipfile.ZipFile(filename)
+
+    if "info.txt" in f.namelist():
+        with f.open("info.txt", "r") as info_file:
+            info = info_file.read()
+        
+        info = info.decode('utf-8')
+        infos = info.splitlines()[1:]
+        infos = [info.split(':', 1) for info in infos]
+        infos = [[x, y.strip()] for x, y in infos]
+        infos = dict(infos)
+        
+        name = infos.get("Name", "UK")
+        song = infos.get("Song").encode('gbk').decode('cp437')
+        illustration = infos.get("Picture").encode('gbk').decode('cp437')
+        chart = infos.get("Chart").encode('gbk').decode('cp437')
+        level = infos.get("Level", "???")
+        composer = infos.get("Composer", "UK")
+        charter = infos.get("Charter", "UK")
+        illustrator = infos.get("Illustrator", "UK")
+    elif "info.csv" in f.namelist():
+        with f.open("info.csv", "r") as info_file:
+            info = info_file.read()
+        
+        info = info.decode('utf-8')
+        reader = csv.DictReader(io.StringIO(info))
+        next(reader)
+        entry = next(reader)
+        name = entry.get("Name", "UK")
+        song = entry.get("Music").encode('gbk').decode('cp437')
+        illustration = entry.get("Image").encode('gbk').decode('cp437')
+        chart = entry.get("Chart").encode('gbk').decode('cp437')
+        level = entry.get("Level", "???")
+        composer = entry.get("Artist", "UK")
+        charter = entry.get("Designer", "UK")
+        illustrator = entry.get("Illustrator", "UK")
+    else:
+        name = "UK"
+        level = "???"
+        composer = "UK"
+        charter = "UK"
+        illustrator = "UK"
+        chart = "UK"
+        song = "UK"
+        illustration = "UK"
+        for entry in f.namelist():
+            if entry.endswith(".json"):
+                chart = entry
+            elif entry.endswith(music_format):
+                song = entry
+            elif entry.endswith(image_format):
+                illustration = entry
+    return {"name": name, "song": song, "illustration": illustration, "chart": chart, "level": level, "composer": composer, "charter": charter, "illustrator": illustrator}
+```
