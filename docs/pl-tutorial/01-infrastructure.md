@@ -26,10 +26,13 @@
 #include <string.h>
 #include <stdint.h>
 
+#define max(a, b) ((a) > (b) ? (a) : (b))
+#define min(a, b) ((a) < (b) ? (a) : (b))
+
 #endif
 ```
 
-目前只导入了经典的这几家，后面也许会扩充，也许不会。
+目前只导入了经典的这几家，然后写了两个肯定有用的最大最小值。后面也许会扩充，也许不会。
 
 动态数组与数组相比，唯一的区别在于它的数组容量会动态伸缩。那么在实现动态伸缩之前，我们先来实现一个不会动态伸缩的数组：
 
@@ -518,4 +521,174 @@ for (; *s; s++) rw[rw.size()] = *s;
 
 因此，不管是什么场合，只要走了写入分支，都会调用一遍 `updateSize()`。其实可以加个判断的，只是后面应该也用不到写入，所以作者就咕掉了）
 
-前面提到的基础设施只剩下一个 `map` 还没有实现了。
+前面提到的基础设施只剩下一个 `map` 还没有实现了。`map` 和 `set` 其实非常相像，本质上都是一堆元素不重不漏地出现。因此接下来的讨论主要集中在实现 `set` 上。
+
+显然，实现 `set` 的第一个方法就是直接使用动态数组，但是这样增删改查都是 O(n)，速度极慢。链表也有一样的问题，增删改查都是 O(n) 的，我们需要更高级的数据结构。
+
+按照目前市场行情（？），这方面最专业的是红黑树，在本文中也使用红黑树进行实现。
+
+红黑树是一种特殊的二叉搜索树，以下先介绍二叉搜索树的实现。
+
+二叉搜索树是一种特殊的二叉树，对于其上每一个节点，它都带有一个关键字（key），或者说一个值。对于任意一个节点，它的左子树所带的所有值（如果有）都应该小于它本身所带的值，它的右子树所带的所有值（如果有）都应该大于它本身所带的值。
+
+以上这一条就是二叉搜索树的根本性质，下面开始实现。
+
+首先，定义二叉搜索树的节点如下：
+
+**代码 1-15 二叉搜索树节点（tree_map.h）**
+```cpp
+#ifndef _TREEMAP_H_
+#define _TREEMAP_H_
+
+template <typename T>
+struct TreeNode {
+    T key;
+    TreeNode *fa;
+    TreeNode *left;
+    TreeNode *right;
+
+    TreeNode(T key) : key(key), fa(NULL), left(NULL), right(NULL) {}
+};
+
+template <typename T>
+struct Tree {
+    TreeNode<T> *root = NULL;
+};
+
+#endif
+```
+
+`struct Tree` 是后续操作的接口，以后的操作一般不传 `TreeNode`。
+
+接下来理论上要实现增删改查，但接下来实现的是 `set`，查和改是基于 `set` 实现 `map` 时做的单独封装，这里只实现增删即可。
+
+新增一个节点非常简单：从根节点开始，逐个比较要新增的值与当前节点的值，依二叉搜索树的性质，要新增的值如果小于当前节点值，当前节点就转到左子节点；如果大于，就转到右子节点；否则，说明已经存在这个节点，什么也不做。
+
+**代码 1-16 向二叉搜索树中插入节点（tree_map.h）**
+```cpp
+// struct Tree
+
+template <typename T>
+void insert(Tree<T> &t, T key)
+{
+    TreeNode<T> *node = t.root, *pos = NULL; // pos 为待插入节点的父亲节点
+    while (node) { // 只要 node 节点还存在，说明还没有到达待插入节点本该在的位置
+        pos = node;
+        if (key < node->key) node = node->left;
+        else if (key > node->key) node = node->right;
+        else {
+            return;
+        }
+    }
+    // 走到这里，node 为该节点本该存在的位置，pos 为该节点要插入的位置
+    TreeNode<T> *new_node = new TreeNode<T>(key); // 这时再新建节点
+    if (!pos) t.root = new_node; // 如果没有父亲节点，说明连根都没有，设置成根节点
+    else if (key < pos->key) pos->left = new_node, new_node->fa = pos; // 否则按照位置，把新节点放进去，并设置好父子关系
+    else pos->right = new_node, new_node->fa = pos;
+}
+
+// #endif
+```
+
+删除则要麻烦许多，删除一个节点，首先要找到这个节点，然后要依照它有没有孩子来讨论。
+
+**代码 1-17 从二叉搜索树中删除一个节点（1）找到节点（tree_map.h）**
+```cpp
+template <typename T>
+bool remove(Tree<T> &t, T key)
+{
+    TreeNode<T> *node = t.root;
+    while (node) {
+        if (key < node->key) node = node->left;
+        else if (key > node->key) node = node->right;
+        else break;
+    }
+    if (!node) return false;
+    // node就是要找的节点，以下分情况讨论
+    return true;
+}
+```
+
+第一种情况，待删除节点没有孩子，那非常简单，直接删除，并且把它在父亲中对应的位置设置成 NULL。
+
+**代码 1-18 从二叉搜索树中删除一个节点（2）无孩子（tree_map.h）**
+```cpp
+    // node就是要找的节点，以下分情况讨论
+    // p1. 无孩子
+    TreeNode<T> *p = node->fa;
+    if (!node->left && !node->right) {
+        // 直接删除。
+        if (p) { // 如果删的是根节点自然不用考虑这个
+            if (p->left == node) p->left = NULL;
+            else if (p->right == node) p->right = NULL;
+        }
+        delete node;
+    }
+    // return true;
+```
+
+第二种情况，只有一个孩子。这时把它孩子的值、左子树和右子树抢夺过来，然后把它的孩子删除即可。为什么可以这样做呢？
+
+以下不妨设这要删除的节点是 N，它是它的父亲 P 的左孩子，而 N 的唯一一个孩子是 C。那么，由于要删除的是 N，由二叉搜索树的性质，无论 C 是 N 的左孩子还是右孩子，C 所带的值都应该比 P 要小。因此，用 C 代替 N，并不会破坏二叉搜索树的根本性质；反之同理。
+
+**代码 1-19 从二叉搜索树中删除一个节点（3）只有一个孩子（tree_map.h）**
+```cpp
+    // p1. 无孩子
+    // p2. 只有一个孩子，用孩子替代它
+    else if (!node->left) {
+        TreeNode<T> *right = node->right;
+        node->key = right->key;
+        node->left = right->left;
+        node->right = right->right;
+        delete right;
+    } else if (!node->right) {
+        TreeNode<T> *left = node->left;
+        node->key = left->key;
+        node->left = left->left;
+        node->right = left->right;
+        delete left;
+    }
+    // return true;
+```
+
+由于删除的是孩子，因此不用修改任何有关父亲的指针。
+
+第三种情况，有两个孩子。先给结论：这种情况下，用它的右子树的最小值（左子树的最大值也行）替换掉它本来的值，然后删除右子树的最小值原本所在的节点。
+
+为什么要这样做呢？首先，右子树的最小值所在节点，依照二叉搜索树的性质，它是没有左孩子的，不然它的左孩子的值比它的值更小，它的值就不是最小值了；从而删除这个节点，属于上面的第二种情况，是已经能够解决的问题。
+
+第二，自然是因为这样做不会破坏任何二叉搜索树的性质。设这要删除的结点为 N，它右子树的最小值所在节点为 S。由于它是右子树的最小值，右子树所带的所有值都大于 S 的值；又由于它位于右子树，它的值比 N 的值要大，从而比 N 的左子树的任何一个值都要大。从而，用 S 的值替换 N 的值，不破坏任何二叉搜索树的性质。
+
+右子树最小值虽然没有左孩子，但是可能有右孩子，在删除时，应该把它的右孩子过继给它的父亲。
+
+那么为什么前面说左子树的最大值也行呢？留给感兴趣的读者作为习题。仿照上面逻辑论证一遍即可。
+
+这段虽然原理比较难，但代码并没有增加。
+
+**代码 1-20 从二叉搜索树中删除一个节点（4）有两个孩子（tree_map.h）**
+```cpp
+    // p2. 只有一个孩子，用孩子替代它
+    // p3. 有两个孩子，用右子树的最小值替代它
+    else {
+        TreeNode<T> *succ = node->right, *succ_p = node;
+        while (succ->left) succ_p = succ, succ = succ->left;
+        node->key = succ->key;
+        succ_p->left = succ->right;
+        delete succ;
+    }
+    // return true;
+```
+
+至此，就已经实现了二叉搜索树，并没有什么难度。但是极端情况下，二叉搜索树会退化成一条链变成链表，于是平衡树应运而生。
+
+平衡树所谓的“平衡”，自然是与不平衡相对的。不平衡的极端，就是上面说过的变成链表。那么什么树是比较平衡的呢？满二叉树、完全二叉树，应该是最为平衡的树了。除此以外，什么是平衡的，什么是不平衡的，没有明确的界定。一般是看左子树与右子树的高度差，以及节点个数等。
+
+前面提到的红黑树，就是一种平衡树。除此以外，平衡树还有 treap、splay、AVL 等等多种。
+
+treap 的核心思想是，给一棵树上的每一个节点两个值，第一个值是用户自己要存的值，称它为 key；第二个值是随机分配的，我们称它为 rank。treap 是 tree 和 heap 的结合，它也是一种二叉树，但是 key 满足二叉搜索树的性质，而 rank 满足堆的性质。由于不是所有 OS 都有随机，treap 不予考虑。
+
+splay 的核心思想是，每次访问了一个节点（这里的访问指查找与插入），都要把刚刚被访问的节点变成根节点。由于 ??我不能理解为什么要这么做?? 这样做太过复杂，splay 不与考虑。
+
+AVL 的核心思想是，既然你不平衡来源于高度差，我就限制你的高度差不能超过 2，一旦越界，就意味着树不再平衡，需要进行调整。在插入节点和删除节点时，有可能会造成这样的变化。但由于我不知道什么时候需要维护平衡，如果一直要求维护平衡又慢的要死，AVL 不予考虑。
+
+红黑树，业界良心，零差评，从操作系统到编程语言标准库，从操作系统底层数据结构到用户每日使用的基本结构，都有红黑树的身影。唯一的问题是平衡维护情况多，讨论繁，但主要是也没有别的可选，因此最终选择用红黑树来实现 map。
