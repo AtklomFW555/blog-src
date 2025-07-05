@@ -525,7 +525,7 @@ for (; *s; s++) rw[rw.size()] = *s;
 
 显然，实现 `set` 的第一个方法就是直接使用动态数组，但是这样增删改查都是 O(n)，速度极慢。链表也有一样的问题，增删改查都是 O(n) 的，我们需要更高级的数据结构。
 
-按照目前市场行情（？），这方面最专业的是红黑树，在本文中也使用红黑树进行实现。
+按照目前市场行情（？），这方面最专业的是红黑树。不过，首先还是应该要介绍一下红黑树到底是什么东西。
 
 红黑树是一种特殊的二叉搜索树，以下先介绍二叉搜索树的实现。
 
@@ -543,7 +543,6 @@ for (; *s; s++) rw[rw.size()] = *s;
 template <typename T>
 struct TreeNode {
     T key;
-    TreeNode *fa;
     TreeNode *left;
     TreeNode *right;
 
@@ -583,8 +582,8 @@ void insert(Tree<T> &t, T key)
     // 走到这里，node 为该节点本该存在的位置，pos 为该节点要插入的位置
     TreeNode<T> *new_node = new TreeNode<T>(key); // 这时再新建节点
     if (!pos) t.root = new_node; // 如果没有父亲节点，说明连根都没有，设置成根节点
-    else if (key < pos->key) pos->left = new_node, new_node->fa = pos; // 否则按照位置，把新节点放进去，并设置好父子关系
-    else pos->right = new_node, new_node->fa = pos;
+    else if (key < pos->key) pos->left = new_node; // 否则按照位置，把新节点放进去，并设置好父子关系
+    else pos->right = new_node;
 }
 
 // #endif
@@ -597,8 +596,9 @@ void insert(Tree<T> &t, T key)
 template <typename T>
 bool remove(Tree<T> &t, T key)
 {
-    TreeNode<T> *node = t.root;
+    TreeNode<T> *node = t.root, *p = NULL;
     while (node) {
+        if (key != node->key) p = node; // 在没找到之前更新为上一次的node，p就是node的父亲
         if (key < node->key) node = node->left;
         else if (key > node->key) node = node->right;
         else break;
@@ -615,12 +615,13 @@ bool remove(Tree<T> &t, T key)
 ```cpp
     // node就是要找的节点，以下分情况讨论
     // p1. 无孩子
-    TreeNode<T> *p = node->fa;
     if (!node->left && !node->right) {
         // 直接删除。
         if (p) { // 如果删的是根节点自然不用考虑这个
             if (p->left == node) p->left = NULL;
             else if (p->right == node) p->right = NULL;
+        } else { // 否则删除的是根节点
+            t.root = NULL; // 为避免遍历时出现错误，设置root为NULL
         }
         delete node;
     }
@@ -629,7 +630,7 @@ bool remove(Tree<T> &t, T key)
 
 第二种情况，只有一个孩子。这时把它孩子的值、左子树和右子树抢夺过来，然后把它的孩子删除即可。为什么可以这样做呢？
 
-以下不妨设这要删除的节点是 N，它是它的父亲 P 的左孩子，而 N 的唯一一个孩子是 C。那么，由于要删除的是 N，由二叉搜索树的性质，无论 C 是 N 的左孩子还是右孩子，C 所带的值都应该比 P 要小。因此，用 C 代替 N，并不会破坏二叉搜索树的根本性质；反之同理。
+以下不妨设这要删除的节点是 N，它是它的父亲 P 的左孩子，而 N 的唯一一个孩子是 C。那么，由于要删除的是 N，由二叉搜索树的性质，无论 C 是 N 的左孩子还是右孩子，C 所带的值都应该比 P 要小。因此，用 C 代替 N，并不会破坏二叉搜索树的性质；反之同理。
 
 **代码 1-19 从二叉搜索树中删除一个节点（3）只有一个孩子（tree_map.h）**
 ```cpp
@@ -692,3 +693,57 @@ splay 的核心思想是，每次访问了一个节点（这里的访问指查�
 AVL 的核心思想是，既然你不平衡来源于高度差，我就限制你的高度差不能超过 2，一旦越界，就意味着树不再平衡，需要进行调整。在插入节点和删除节点时，有可能会造成这样的变化。但由于我不知道什么时候需要维护平衡，如果一直要求维护平衡又慢的要死，AVL 不予考虑。
 
 红黑树，业界良心，零差评，从操作系统到编程语言标准库，从操作系统底层数据结构到用户每日使用的基本结构，都有红黑树的身影。唯一的问题是平衡维护情况多，讨论繁，但主要是也没有别的可选，因此最终选择用红黑树来实现 map。
+
+红黑树在二叉搜索树的基础上，额外给所有节点染上红黑两色，并且把所有节点中那个不存在的子节点看做一个真实存在的节点 NIL。
+
+在染色时，需要遵循以下规则：
+
+1) 根节点和 NIL 节点都是黑色的；
+
+2) 红节点的子节点都是黑色的；
+
+3) 染色后，从根节点到 NIL 节点的所有路径中，黑色节点的数量相同。
+
+从 2、3 两条规则稍微尝试一下就可以发现，一个退化成链表的二叉搜索树是无法在规则要求内染色的，必须经过调整。而调整的过程就是一个把树变平衡的过程，至于为什么，我不会证，不管它，知道是这样就行。
+
+前面光说了半天调整调整，怎么做到既改变节点的高度差，又能够维护二叉搜索树的性质呢？还真有这样的操作，我们称之为**旋转**。
+
+旋转分为左旋和右旋：
+
+```plain
+    R                      L
+   / \                    / \
+  L   G    <----->       S   R
+ / \                        / \
+S   M                      M   G
+```
+
+如图所示，对于这样一棵子树，从左到右的变化被称为右旋，从右到左的变化被称为左旋，操作的对象都是这棵子树的根节点。依二叉搜索树性质，S 为小于 L 的子树，M 为大于 L 小于 R 的子树，G 为大于 R 的子树，读者由此不难看出，这样的变化并不破坏这棵子树内部的二叉搜索树性质。
+
+在旋转过程中，如果 S 很低而 G 很高，这样进行右旋有助于降低 G 的高度，抬升 S 的高度，使树更加平衡；反之亦然。旋转是二叉搜索树为了维护平衡进行自我调整，最重要且唯一的手段。
+
+只需要对着上面的图示一点点来，就可以写出旋转的代码，并不难做。
+
+**代码 1-21 左旋与右旋（tree_map.h）**
+```cpp
+// struct Tree
+
+template <typename T>
+TreeNode<T> *left_rotate(TreeNode<T> *l)
+{
+    TreeNode *r = l->right;
+    l->right = r->left;
+    r->left = l;
+    return r;
+}
+
+template <typename T>
+TreeNode<T> *right_rotate(TreeNode<T> *r)
+{
+    TreeNode *l = r->left;
+    r->left = l->right;
+    l->right = l;
+    return l}
+
+// void insert()
+```
