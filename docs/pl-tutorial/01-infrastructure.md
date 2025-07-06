@@ -543,6 +543,7 @@ for (; *s; s++) rw[rw.size()] = *s;
 template <typename T>
 struct TreeNode {
     T key;
+    TreeNode *fa;
     TreeNode *left;
     TreeNode *right;
 
@@ -565,48 +566,49 @@ struct Tree {
 
 **代码 1-16 向二叉搜索树中插入节点（tree_map.h）**
 ```cpp
-// struct Tree
+    // TreeNode<T> *root = NULL;
 
-template <typename T>
-void insert(Tree<T> &t, T key)
-{
-    TreeNode<T> *node = t.root, *pos = NULL; // pos 为待插入节点的父亲节点
-    while (node) { // 只要 node 节点还存在，说明还没有到达待插入节点本该在的位置
-        pos = node;
-        if (key < node->key) node = node->left;
-        else if (key > node->key) node = node->right;
-        else {
-            return;
+    void insert(T key)
+    {
+        TreeNode<T> *node = root, *pos = NULL; // pos 为待插入节点的父亲节点
+        while (node) { // 只要 node 节点还存在，说明还没有到达待插入节点本该在的位置
+            pos = node;
+            if (key < node->key) node = node->left;
+            else if (key > node->key) node = node->right;
+            else {
+                return;
+            }
         }
+        // 走到这里，node 为该节点本该存在的位置，pos 为该节点要插入的位置
+        TreeNode<T> *new_node = new TreeNode<T>(key); // 这时再新建节点
+        new_node->fa = pos; // 设置父节点
+        if (!pos) root = new_node; // 如果没有父亲节点，说明连根都没有，设置成根节点
+        else if (key < pos->key) pos->left = new_node; // 否则按照位置，把新节点放进去，并设置好父子关系
+        else pos->right = new_node;
     }
-    // 走到这里，node 为该节点本该存在的位置，pos 为该节点要插入的位置
-    TreeNode<T> *new_node = new TreeNode<T>(key); // 这时再新建节点
-    if (!pos) t.root = new_node; // 如果没有父亲节点，说明连根都没有，设置成根节点
-    else if (key < pos->key) pos->left = new_node; // 否则按照位置，把新节点放进去，并设置好父子关系
-    else pos->right = new_node;
-}
 
-// #endif
+// };
 ```
 
 删除则要麻烦许多，删除一个节点，首先要找到这个节点，然后要依照它有没有孩子来讨论。
 
 **代码 1-17 从二叉搜索树中删除一个节点（1）找到节点（tree_map.h）**
 ```cpp
-template <typename T>
-bool remove(Tree<T> &t, T key)
-{
-    TreeNode<T> *node = t.root, *p = NULL;
-    while (node) {
-        if (key != node->key) p = node; // 在没找到之前更新为上一次的node，p就是node的父亲
-        if (key < node->key) node = node->left;
-        else if (key > node->key) node = node->right;
-        else break;
+    // void insert(T key)
+    bool remove(T key)
+    {
+        TreeNode<T> *node = root, *p = NULL;
+        while (node) {
+            if (key != node->key) p = node; // 在没找到之前更新为上一次的node，p就是node的父亲
+            if (key < node->key) node = node->left;
+            else if (key > node->key) node = node->right;
+            else break;
+        }
+        if (!node) return false;
+        // node就是要找的节点，以下分情况讨论
+        return true;
     }
-    if (!node) return false;
-    // node就是要找的节点，以下分情况讨论
-    return true;
-}
+// };
 ```
 
 第一种情况，待删除节点没有孩子，那非常简单，直接删除，并且把它在父亲中对应的位置设置成 NULL。
@@ -621,7 +623,7 @@ bool remove(Tree<T> &t, T key)
             if (p->left == node) p->left = NULL;
             else if (p->right == node) p->right = NULL;
         } else { // 否则删除的是根节点
-            t.root = NULL; // 为避免遍历时出现错误，设置root为NULL
+            root = NULL; // 为避免遍历时出现错误，设置root为NULL
         }
         delete node;
     }
@@ -641,18 +643,22 @@ bool remove(Tree<T> &t, T key)
         node->key = right->key;
         node->left = right->left;
         node->right = right->right;
+        if (node->left) node->left->fa = node;
+        if (node->right) node->right->fa = node;
         delete right;
     } else if (!node->right) {
         TreeNode<T> *left = node->left;
         node->key = left->key;
         node->left = left->left;
         node->right = left->right;
+        if (node->left) node->left->fa = node;
+        if (node->right) node->right->fa = node;
         delete left;
     }
     // return true;
 ```
 
-由于删除的是孩子，因此不用修改任何有关父亲的指针。
+在抢夺孩子的子树的过程中，一并重新设置了父亲，这样无论从什么地方，都再也找不到这个孩子的踪迹了。
 
 第三种情况，有两个孩子。先给结论：这种情况下，用它的右子树的最小值（左子树的最大值也行）替换掉它本来的值，然后删除右子树的最小值原本所在的节点。
 
@@ -675,6 +681,7 @@ bool remove(Tree<T> &t, T key)
         while (succ->left) succ_p = succ, succ = succ->left;
         node->key = succ->key;
         succ_p->left = succ->right;
+        if (succ->right) succ->right->fa = succ_p;
         delete succ;
     }
     // return true;
@@ -726,24 +733,40 @@ S   M                      M   G
 
 **代码 1-21 左旋与右旋（tree_map.h）**
 ```cpp
-// struct Tree
+    // TreeNode<T> *root = NULL;
 
-template <typename T>
-TreeNode<T> *left_rotate(TreeNode<T> *l)
-{
-    TreeNode *r = l->right;
-    l->right = r->left;
-    r->left = l;
-    return r;
-}
+    void left_rotate(TreeNode<T> *l)
+    {
+        TreeNode<T> *r = l->right, *p = l->fa;
+        l->right = r->left;
+        r->left = l;
 
-template <typename T>
-TreeNode<T> *right_rotate(TreeNode<T> *r)
-{
-    TreeNode *l = r->left;
-    r->left = l->right;
-    l->right = l;
-    return l}
+        r->fa = p;
+        if (p) {
+            if (p->left == l) p->left = r;
+            else p->right = r;
+        } else root = r;
 
-// void insert()
+        l->fa = r;
+        if (l->right) l->right->fa = l;
+    }
+
+    void right_rotate(TreeNode<T> *r)
+    {
+        TreeNode<T> *l = r->left, *p = r->fa;
+        r->left = l->right;
+        l->right = r;
+
+        l->fa = p;
+        r->fa = l;
+        if (p) {
+            if (p->left == r) p->left = l;
+            else p->right = l;
+        } else {
+            root = l;
+        }
+        if (r->left) r->left->fa = r;
+    }
+
+    // void insert()
 ```
