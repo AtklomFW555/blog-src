@@ -717,7 +717,47 @@ AVL 的核心思想是，既然你不平衡来源于高度差，我就限制你�
 
 在总结了以上几种常见的平衡树后，经过权衡，最终选择 AVL 而不是红黑树来实现 map，因为红黑树情况太多 ??而我太懒??，实现起来太麻烦了。
 
-AVL 中，维护平衡的关键在于树的高度。
+AVL 中，维护平衡的关键在于树节点的高度。那么什么是一个节点的高度呢？定义：叶子节点的高度为 1；否则，取左右子树中较高者加一。
+
+接下来就可以定义高度以及更新高度的代码了：
+
+**代码 1-21 添加高度成员并维护高度（tree_map.h）**
+```cpp
+struct TreeNode {
+    // TreeNode *right;
+    int height;
+
+    TreeNode(T key) : key(key), fa(NULL), left(NULL), right(NULL), height(1) {}
+    
+    void update_height() {
+        if (!left && !right) height = 1;
+        else if (!left) height = right->height + 1;
+        else if (!right) height = left->height + 1;
+        else height = max(left->height, right->height) + 1;
+    }
+};
+```
+
+由于涉及到 NULL，这一段代码比较恶心，或许这个函数不应该做成成员函数。
+
+对于每一个节点，还定义它有一个平衡因子，也就是前面提到的高度差，它的值是：左子树高度减右子树高度。
+
+由于要考虑到节点是 NULL 的可能性，这一部分的代码也相对复杂。
+
+**代码 1-22 计算平衡因子（tree_map.h）**
+```cpp
+struct TreeNode {
+    // void update_height()
+    int balance_factor() {
+        if (!left && !right) return 0;
+        else if (!left) return -right->height;
+        else if (!right) return left->height;
+        else return left->height - right->height;
+    }
+};
+```
+
+接下来就可以正式进入调整平衡的部分了。
 
 前面光说了半天调整调整，怎么做到既改变节点的高度差，又能够维护二叉搜索树的性质呢？还真有这样的操作，我们称之为**旋转**。
 
@@ -737,7 +777,7 @@ S   M                      M   G
 
 只需要对着上面的图示一点点来，就可以写出旋转的代码，并不难做。
 
-**代码 1-21 左旋与右旋（tree_map.h）**
+**代码 1-23 左旋与右旋（tree_map.h）**
 ```cpp
     // TreeNode<T> *root = NULL;
 
@@ -755,6 +795,9 @@ S   M                      M   G
 
         l->fa = r;
         if (l->right) l->right->fa = l;
+
+        l->updateHeight();
+        r->updateHeight();
     }
 
     void right_rotate(TreeNode<T> *r)
@@ -772,7 +815,12 @@ S   M                      M   G
             root = l;
         }
         if (r->left) r->left->fa = r;
+
+        l->updateHeight();
+        r->updateHeight();
     }
 
     // void insert()
 ```
+
+看似代码很多，真正重要的只有前三行，剩下几行的工作都只是重新设置父节点、有必要时重新设置根节点以及更新高度。只要脑子里有图，照着图一点一点写，一定可以把代码写出来。
