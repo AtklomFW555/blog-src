@@ -93,7 +93,7 @@ namespace siberia::base {
 
         int size() const { return len; } // size() 对应实际大小，应该返回的是 len
         int capacity() const { return capacity_; } // capacity() 对应容量，应该返回的是 capacity_
-        T *buffer() { return arr; } // buffer() 返回缓冲区，一般用不到这玩意，由于可能对arr修改，不对*this声明const 
+        T *buffer() const { return arr; } // buffer() 返回缓冲区，一般用不到这玩意，对arr修改不会引起对象的变化，符合const的意义，准许加上const
     };
 }
 
@@ -521,9 +521,9 @@ for (; *s; s++) rw[rw.size()] = *s;
 
 因此，不管是什么场合，只要走了写入分支，都会调用一遍 `updateSize()`。其实可以加个判断的，只是后面应该也用不到写入，所以作者就咕掉了）
 
-前面提到的基础设施只剩下一个 `map` 还没有实现了。`map` 和 `set` 其实非常相像，本质上都是一堆元素不重不漏地出现。因此接下来的讨论主要集中在实现 `set` 上。
+前面提到的基础设施只剩下一个 `map` 还没有实现了。
 
-显然，实现 `set` 的第一个方法就是直接使用动态数组，但是这样增删改查都是 O(n)，速度极慢。链表也有一样的问题，增删改查都是 O(n) 的，我们需要更高级的数据结构。
+显然，实现 `map` 的第一个方法就是直接使用动态数组，但是这样增删改查都是 O(n)，速度极慢。链表也有一样的问题，增删改查都是 O(n) 的，我们需要更高级的数据结构。
 
 按照目前市场行情（？），这方面最专业的是红黑树。不过，首先还是应该要介绍一下红黑树到底是什么东西，然后再看看红黑树到底有什么优势。
 
@@ -540,37 +540,38 @@ for (; *s; s++) rw[rw.size()] = *s;
 #ifndef _TREEMAP_H_
 #define _TREEMAP_H_
 
-template <typename T>
+template <typename K, typename V>
 struct TreeNode {
-    T key;
+    K key;
+    V value;
     TreeNode *fa;
     TreeNode *left;
     TreeNode *right;
 
-    TreeNode(T key) : key(key), fa(NULL), left(NULL), right(NULL) {}
+    TreeNode(const K &key, const V &value) : key(key), value(value), fa(NULL), left(NULL), right(NULL) {}
 };
 
-template <typename T>
-struct Tree {
-    TreeNode<T> *root = NULL;
+template <typename K, typename V>
+struct TreeMap {
+    TreeNode<K, V> *root = NULL;
 };
 
 #endif
 ```
 
-`struct Tree` 是后续操作的接口，以后的操作一般不传 `TreeNode`。
+`struct TreeMap` 是后续操作的接口，后续的函数都是它的成员函数（以便修改 root）。
 
-接下来理论上要实现增删改查，但接下来实现的是 `set`，查和改是基于 `set` 实现 `map` 时做的单独封装，这里只实现增删即可。
+接下来理论上要实现增删改查，但查和改都可以基于在实现 `map` 接口时进行单独封装，这里只实现增删即可。由于要实现的是 `map`，提前在节点里面存好了 value。
 
-新增一个节点非常简单：从根节点开始，逐个比较要新增的值与当前节点的值，依二叉搜索树的性质，要新增的值如果小于当前节点值，当前节点就转到左子节点；如果大于，就转到右子节点；否则，说明已经存在这个节点，什么也不做。
+回到二叉搜索树上来。往二叉搜索树里新增一个节点非常简单：从根节点开始，逐个比较要新增的值与当前节点的值，依二叉搜索树的性质，要新增的值如果小于当前节点值，当前节点就转到左子节点；如果大于，就转到右子节点；否则，说明已经存在这个节点，什么也不做。
 
 **代码 1-16 向二叉搜索树中插入节点（tree_map.h）**
 ```cpp
-    // TreeNode<T> *root = NULL;
+    // TreeNode<K, V> *root = NULL;
 
-    void insert(T key)
+    void insert(const K &key, const V &value)
     {
-        TreeNode<T> *node = root, *pos = NULL; // pos 为待插入节点的父亲节点
+        TreeNode<K, V> *node = root, *pos = NULL; // pos 为待插入节点的父亲节点
         while (node) { // 只要 node 节点还存在，说明还没有到达待插入节点本该在的位置
             pos = node;
             if (key < node->key) node = node->left;
@@ -580,7 +581,7 @@ struct Tree {
             }
         }
         // 走到这里，node 为该节点本该存在的位置，pos 为该节点要插入的位置
-        TreeNode<T> *new_node = new TreeNode<T>(key); // 这时再新建节点
+        TreeNode<K, V> *new_node = new TreeNode<K, V>(key, value); // 这时再新建节点
         new_node->fa = pos; // 设置父节点
         if (!pos) root = new_node; // 如果没有父亲节点，说明连根都没有，设置成根节点
         else if (key < pos->key) pos->left = new_node; // 否则按照位置，把新节点放进去，并设置好父子关系
@@ -594,10 +595,10 @@ struct Tree {
 
 **代码 1-17 从二叉搜索树中删除一个节点（1）找到节点（tree_map.h）**
 ```cpp
-    // void insert(T key)
-    bool remove(T key)
+    // void insert(const K &key, const V &value)
+    bool remove(const K &key)
     {
-        TreeNode<T> *node = root, *p = NULL;
+        TreeNode<K, V> *node = root, *p = NULL;
         while (node) {
             if (key != node->key) p = node; // 在没找到之前更新为上一次的node，p就是node的父亲
             if (key < node->key) node = node->left;
@@ -639,7 +640,7 @@ struct Tree {
     // p1. 无孩子
     // p2. 只有一个孩子，用孩子替代它
     else if (!node->left) {
-        TreeNode<T> *right = node->right;
+        TreeNode<K, V> *right = node->right;
         node->key = right->key;
         node->left = right->left;
         node->right = right->right;
@@ -647,7 +648,7 @@ struct Tree {
         if (node->right) node->right->fa = node;
         delete right;
     } else if (!node->right) {
-        TreeNode<T> *left = node->left;
+        TreeNode<K, V> *left = node->left;
         node->key = left->key;
         node->left = left->left;
         node->right = left->right;
@@ -677,7 +678,7 @@ struct Tree {
     // p2. 只有一个孩子，用孩子替代它
     // p3. 有两个孩子，用右子树的最小值替代它
     else {
-        TreeNode<T> *succ = node->right, *succ_p = node;
+        TreeNode<K, V> *succ = node->right, *succ_p = node;
         while (succ->left) succ_p = succ, succ = succ->left;
         node->key = succ->key;
         succ_p->left = succ->right;
@@ -727,7 +728,7 @@ struct TreeNode {
     // TreeNode *right;
     int height;
 
-    TreeNode(T key) : key(key), fa(NULL), left(NULL), right(NULL), height(1) {}
+    TreeNode(const K &key, const V &value) : key(key), value(value), fa(NULL), left(NULL), right(NULL), height(1) {}
     
     void update_height() {
         if (!left && !right) height = 1;
@@ -779,11 +780,11 @@ S   M                      M   G
 
 **代码 1-23 左旋与右旋（tree_map.h）**
 ```cpp
-    // TreeNode<T> *root = NULL;
+    // TreeNode<K, V> *root = NULL;
 
-    void left_rotate(TreeNode<T> *l)
+    void left_rotate(TreeNode<K, V> *l)
     {
-        TreeNode<T> *r = l->right, *p = l->fa;
+        TreeNode<K, V> *r = l->right, *p = l->fa;
         l->right = r->left;
         r->left = l;
 
@@ -800,9 +801,9 @@ S   M                      M   G
         r->updateHeight();
     }
 
-    void right_rotate(TreeNode<T> *r)
+    void right_rotate(TreeNode<K, V> *r)
     {
-        TreeNode<T> *l = r->left, *p = r->fa;
+        TreeNode<K, V> *l = r->left, *p = r->fa;
         r->left = l->right;
         l->right = r;
 
@@ -869,8 +870,8 @@ A   C           B
 
 **代码 1-24 维护平衡（tree_map.h）**
 ```cpp
-    // void right_rotate(TreeNode<T> *r)
-    void balance_fixup(TreeNode<T> *node)
+    // void right_rotate(TreeNode<K, V> *r)
+    void balance_fixup(TreeNode<K, V> *node)
     {
         if (!node) return;
         node->update_height();
@@ -885,38 +886,38 @@ A   C           B
             left_rotate(node);
         }
     }
-    // void insert(T key)
+    // void insert(const K &key, const V &value)
 ```
 
 注意，沿着节点维护到根，是沿着节点还没有动之前的路径，而不是动之后的路径，因此在写维护到根的函数时，要提前把父节点存起来，而不是在维护平衡完后再进行访问。
 
 **代码 1-25 维护平衡到根（tree_map.h）**
 ```cpp
-    // void balance_fixup(TreeNode<T> *node)
-    void balance_fixup_to_root(TreeNode<T> *node)
+    // void balance_fixup(TreeNode<K, V> *node)
+    void balance_fixup_to_root(TreeNode<K, V> *node)
     {
         if (!node) return;
-        TreeNode<T> *p = node->fa;
+        TreeNode<K, V> *p = node->fa;
         while (p) {
             balance_fixup(node);
             node = p;
             p = node->fa;
         }
     }
-    // void insert(T key)
+    // void insert(const K &key, const V &value)
 ```
 
 至此，维护平衡的操作就写完了，只需要在插入和删除时进行调用即可：
 
 **代码 1-26 执行维护操作（tree_map.h）**
 ```cpp
-    void insert(T key)
+    void insert(const K &key, const V &value)
     {
         // else pos->right = new_node;
         if (pos) balance_fixup_to_root(pos);
     }
 
-    bool remove(T key)
+    bool remove(const K &key)
     {
         // p2. 只有一个孩子，用孩子替代它
         else if (!node->left) {
@@ -939,6 +940,4 @@ A   C           B
 
 删除叶子节点的情况本来也应该维护一下平衡，转念一想好像没必要，所以就不这么干了。??主要是加上了会卡死，至于为什么会卡死，留给读者思考（逃）??
 
-至此，AVL 树也写完了，代码并没有增加几行（应该？）。使用非常 naive 的基准测试方法（rand 出 1e7 个数字然后往 AVL 和 map 里做操作比较时间）发现，手写的 AVL 与 map 性能基本相当，插入 AVL 略快，查找参差不齐，删除 AVL 略慢。
-
-最后一步，是把 AVL 封装成一个 map 一样的东西。
+至此，AVL 树也写完了，代码并没有增加几行（应该？）。最后一步，是把 AVL 封装成一个 map 一样的东西。前面一直用 K 来表示一个节点或者是树的类型，就是为了此刻所准备。
