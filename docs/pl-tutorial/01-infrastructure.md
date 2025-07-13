@@ -824,3 +824,121 @@ S   M                      M   G
 ```
 
 看似代码很多，真正重要的只有前三行，剩下几行的工作都只是重新设置父节点、有必要时重新设置根节点以及更新高度。只要脑子里有图，照着图一点一点写，一定可以把代码写出来。
+
+那么该怎么维护平衡呢？接下来的讨论在以下的子树中进行（以下省略不发生变化的子树）：
+
+```plain
+    D
+   / \
+  B   E
+ / \
+A   C
+```
+
+由于维护路径是从底维护到根，所以此处假设 A、B、C、E 的平衡维护均已完成。显然此图中 B 应该比 E 高，若 E 比 B 高，只需要把以下结论中的左右子树对调，左右旋对调，高度大小关系也对调就可以了。
+
+由于 B 比 E 高且需要维护平衡，说明 B 的高度比 E 的高度大 2（否则早该维护平衡了轮不到这时候）。设 E 的高度为 x，则 B 的高度为 x + 2。
+
+若 A 的高度大于等于 C，那么 A 的高度应为 x + 1（由高度定义显然），而 C 的高度为 x 或 x + 1 其中之一。此时右旋节点 D，子树变成：
+
+```plain
+    D            B
+   / \          / \
+  B   E  --->  A   D
+ / \              / \
+A   C            C   E
+```
+
+由于没有动 A、C、E 的子树，A、C、E 的高度均不变。而 D 的高度为 C 的高度与 E 的高度中较大者加一，也就是 x + 2，与 A 的高度差缩小到 1，从而完成了这棵子树平衡的维护。
+
+若 A 的高度小于 C，则 A 的高度应为 x，C 的高度应为 x + 1。此时先左旋节点 B：
+
+```plain
+    D               D
+   / \             / \
+  B   E     --->  C   E
+ / \             /
+A   C           B
+               /
+              A 
+```
+
+那么这时，由于没有动 A 和 E 的子树，两者高度不变，B 的高度变为 x + 1，C 的高度变为 x + 2，而 E 的高度仍然为 x。虽然此时树并没有平衡，但是考虑到 C 未经变化的右子树此时高度仍然为 x，这就相当于转变成了上一种情况，只需再次右旋节点 D 即可。
+
+把上面得到的结论再镜像，就得到了在单个节点上维护平衡的函数 `balance_fixup`：
+
+**代码 1-24 维护平衡（tree_map.h）**
+```cpp
+    // void right_rotate(TreeNode<T> *r)
+    void balance_fixup(TreeNode<T> *node)
+    {
+        if (!node) return;
+        node->update_height();
+
+        int factor = node->balance_factor();
+
+        if (factor > 1) {
+            if (node->left && node->left->balance_factor() < 0) left_rotate(node->left);
+            right_rotate(node);
+        } else if (factor < -1) {
+            if (node->right && node->right->balance_factor() > 0) right_rotate(node->right);
+            left_rotate(node);
+        }
+    }
+    // void insert(T key)
+```
+
+注意，沿着节点维护到根，是沿着节点还没有动之前的路径，而不是动之后的路径，因此在写维护到根的函数时，要提前把父节点存起来，而不是在维护平衡完后再进行访问。
+
+**代码 1-25 维护平衡到根（tree_map.h）**
+```cpp
+    // void balance_fixup(TreeNode<T> *node)
+    void balance_fixup_to_root(TreeNode<T> *node)
+    {
+        if (!node) return;
+        TreeNode<T> *p = node->fa;
+        while (p) {
+            balance_fixup(node);
+            node = p;
+            p = node->fa;
+        }
+    }
+    // void insert(T key)
+```
+
+至此，维护平衡的操作就写完了，只需要在插入和删除时进行调用即可：
+
+**代码 1-26 执行维护操作（tree_map.h）**
+```cpp
+    void insert(T key)
+    {
+        // else pos->right = new_node;
+        if (pos) balance_fixup_to_root(pos);
+    }
+
+    bool remove(T key)
+    {
+        // p2. 只有一个孩子，用孩子替代它
+        else if (!node->left) {
+            // if (node->right) node->right->fa = node;
+            balance_fixup_to_root(node);
+            // delete right;
+        } else if (!node->right) {
+            // if (node->right) node->right->fa = node;
+            balance_fixup_to_root(node);
+            // delete left;
+        }
+        // p3. 有两个孩子，用后继替代它
+        else {
+            //if (succ->right) succ->right->fa = succ_p;
+            balance_fixup_to_root(succ_p);
+            //delete succ;
+        }
+    }
+```
+
+删除叶子节点的情况本来也应该维护一下平衡，转念一想好像没必要，所以就不这么干了。??主要是加上了会卡死，至于为什么会卡死，留给读者思考（逃）??
+
+至此，AVL 树也写完了，代码并没有增加几行（应该？）。使用非常 naive 的基准测试方法（rand 出 1e7 个数字然后往 AVL 和 map 里做操作比较时间）发现，手写的 AVL 与 map 性能基本相当，插入 AVL 略快，查找参差不齐，删除 AVL 略慢。
+
+最后一步，是把 AVL 封装成一个 map 一样的东西。
