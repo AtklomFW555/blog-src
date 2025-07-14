@@ -8,7 +8,7 @@
 
 先简单思考一下，在写的过程中可能会用到什么数据结构呢？显然，首先动态数组 `vector` 就是非常必要的，似乎不管是在什么地方，都会有它的身影；其次，显然变量和它的值之间形成的关系是典型的 key 不重复的 key-value pair，因此我们还应该引入 `map` 后面存变量用（至于是红黑树还是 HashMap，我们暂时先不管它）。
 
-再然后是读写文件，`fopen` 什么的直接暴露有点丑陋，最好要写一些小小的封装。内存泄漏的话，也会比较麻烦，因此分配器也要重新实现一下。
+再然后是读写文件，`fopen` 什么的直接暴露有点丑陋，最好要写一些小小的封装。
 
 综上所述，目前需要实现的基础设施，也就只有一个动态数组、一个字符串、一个 `map` 和一个文件读写。后续如果有了更多需要添加的东西，那后续再说。
 
@@ -26,8 +26,13 @@
 #include <string.h>
 #include <stdint.h>
 
+#ifndef max
 #define max(a, b) ((a) > (b) ? (a) : (b))
+#endif
+
+#ifndef min
 #define min(a, b) ((a) < (b) ? (a) : (b))
+#endif
 
 #endif
 ```
@@ -478,6 +483,11 @@ public:
             parent->updateSize();
             return byte;
         }
+
+        uint8_t operator=(const FilePos &other) {
+            uint8_t pos_byte = (FilePos) other;
+            return operator=(pos_byte);
+        }
     };
     // void updateSize()
     // ...
@@ -502,6 +512,7 @@ public:
 FileReadWriter rw("name.txt");
 rw[0] = '1';
 putchar(rw[1]);
+rw[0] = rw[1];
 ```
 
 第二行的 `rw[0]` 会先返回 `FilePos`，而后面的 `= '1'` 则相当于调用 `FilePos` 的 `operator=`，从而走写入分支；
@@ -509,6 +520,8 @@ putchar(rw[1]);
 第三行的 `rw[1]` 也会先返回 `FilePos`，由于在 `putchar` 里，C++ 编译器会寻找到 `uint8_t` 的隐式转换，于是进入 `FilePos` 的 `operator uint8_t()`，从而走读取分支。
 
 这样一来，就巧妙地在把读写分流的同时，使用基本相同的 API。忘了是在什么地方看到的这个技巧，总之不是我的原创，太天才了！
+
+但是，这样的代码面对第四行的情况会有问题。这时 C++ 不会费劲去进行转换，而是直接调用默认的赋值运算，这样就不会产生任何读写，起不到期待的效果。因此，还添加了另一个 `operator=`，专门用于 `FilePos` 之间的赋值，内容只是先把赋值右边的 `FilePos` 转换到 `uint8_t`，再把这个 `uint8_t` 赋值给自己。`operator=` 固然是一个运算符重载，但是一个成员函数，这样被调用是合理的。
 
 只要理解了上面的说明，立刻就能明白 `FilePos` 这个类是在干什么。虽然这里似乎使用友元会更好一些，但由于 ??作者不会?? 这样写更清晰，所以最终还是把用到的东西都传进来了。实际的读写操作，都是分别在上面说明中提到的转换函数中进行的。
 
@@ -553,13 +566,14 @@ struct TreeNode {
 
 template <typename K, typename V>
 struct TreeMap {
+private:
     TreeNode<K, V> *root = NULL;
 };
 
 #endif
 ```
 
-`struct TreeMap` 是后续操作的接口，后续的函数都是它的成员函数（以便修改 root）。
+`struct TreeMap` 是后续操作的接口，后续的函数都是它的成员函数（以便修改 root）。以下所有成员函数均为 `private`。
 
 接下来理论上要实现增删改查，但查和改都可以基于在实现 `map` 接口时进行单独封装，这里只实现增删即可。由于要实现的是 `map`，提前在节点里面存好了 value。
 
@@ -642,6 +656,7 @@ struct TreeMap {
     else if (!node->left) {
         TreeNode<K, V> *right = node->right;
         node->key = right->key;
+        node->value = right->value;
         node->left = right->left;
         node->right = right->right;
         if (node->left) node->left->fa = node;
@@ -650,6 +665,7 @@ struct TreeMap {
     } else if (!node->right) {
         TreeNode<K, V> *left = node->left;
         node->key = left->key;
+        node->value = left->value;
         node->left = left->left;
         node->right = left->right;
         if (node->left) node->left->fa = node;
@@ -681,7 +697,9 @@ struct TreeMap {
         TreeNode<K, V> *succ = node->right, *succ_p = node;
         while (succ->left) succ_p = succ, succ = succ->left;
         node->key = succ->key;
-        succ_p->left = succ->right;
+        node->value = succ->value;
+        if (succ == succ_p->left) succ_p->left = succ->right;
+        else succ_p->right = succ->right;
         if (succ->right) succ->right->fa = succ_p;
         delete succ;
     }
@@ -940,4 +958,100 @@ A   C           B
 
 删除叶子节点的情况本来也应该维护一下平衡，转念一想好像没必要，所以就不这么干了。??主要是加上了会卡死，至于为什么会卡死，留给读者思考（逃）??
 
-至此，AVL 树也写完了，代码并没有增加几行（应该？）。最后一步，是把 AVL 封装成一个 map 一样的东西。前面一直用 K 来表示一个节点或者是树的类型，就是为了此刻所准备。
+至此，AVL 树也写完了，代码并没有增加几行（应该？）。最后一步，是把 AVL 封装成一个 map 一样的东西。
+
+首先来给 AVL 添加一个搜索功能，根据一个键找到对应的节点：
+
+**代码 1-27 搜索节点（tree_map.h）**
+```cpp
+    TreeNode<K, V> *search(const K &key) {
+        TreeNode<K, V> *node = root;
+        while (node) {
+            if (node->key < key) node = node->right;
+            else if (node->key > key) node = node->left;
+            else return node;
+        }
+        return NULL;
+    }
+```
+
+map 作为数据结构，需要的操作是增删改查，删虽然写了 `remove`，但 private 起来了，因此换用和 C++ 标准库一样的 `erase`：
+
+**代码 1-28 删除节点 `erase`（tree_map.h）**
+```cpp
+    // TreeNode<K, V> *search(const K &key)
+public:
+    bool erase(const K &key) {
+        return remove(key);
+    }
+```
+
+增改查则被统一到一个 `operator[]` 里。这里面对的情况和上面的文件读写其实是非常相似的，在读写 `operator[]` 时，操作是不一样的，因此需要借助临时对象和隐式转换来完成。
+
+**代码 1-29 增、改、查 `operator[]`（tree_map.h）**
+```cpp
+    struct Inter {
+        TreeMap<K, V> *map;
+        K key;
+        Inter(TreeMap<K, V> *map, K key) : map(map), key(key) {}
+        ~Inter() {}
+        operator V() {
+            TreeNode<K, V> *node = map->search(key);
+            if (node) return node->value;
+            return V();
+        }
+
+        V operator=(const V &other) {
+            TreeNode<K, V> *val = map->search(key);
+            if (!val) map->insert(key, other);
+            else val->value = other;
+            return other;
+        }
+
+        V operator=(const Inter &other) {
+            K key = other.key;
+            V value = map->search(key)->value;
+            return operator=(value);
+        }
+    };
+public:
+    Inter operator[](const K &key) {
+        return Inter(this, key);
+    }
+    // bool erase(const K &key)
+```
+
+这里的 `struct Inter` 借鉴了前面的 `FilePos`。查询时，将使用隐式转换，走到 `operator V()` 中；如果是 `map[key] = value` 的形式，会先检查 key 是否存在，如果存在，就把找到节点的 value 换掉，否则，插入一个新的节点，让 key 对应 value。
+
+最后再添加一个 `count` 方法，它的本意是对容器中的元素计数，但由于 map 里元素都是唯一的，因此借用它来表示一个键是否存在。
+
+**代码 1-30 判断 map 中是否存在一个键（tree_map.h）**
+```cpp
+    // bool erase(const K &key)
+    int count(const K &key) {
+        return search(key) != NULL;
+    }
+```
+
+最后把 `TreeNode` 和 `TreeMap` 也扔进 `siberia::base` 这个 namespace 就大功告成了。
+
+至此，几大基础设施终于实现完毕，鼓掌！把上面写的几个头文件都扔进 `base` 目录，再写一个 `base.h`：
+
+**代码 1-31 统一的基础（base.h）**
+```cpp
+#ifndef _BASE_H_
+#define _BASE_H_
+
+#include "base/common.h"
+#include "base/dyn_array.h"
+#include "base/str.h"
+#include "base/exception.h"
+#include "base/tree_map.h"
+#include "base/file.h"
+
+#endif
+```
+
+以后只需要 `#include "base.h"` 就可以访问到前面写的所有东西。
+
+需要注意的是，动态数组的接口与 vector 有些许不同，如果有选择使用 STL 的选手，记得用宏定义啥的把后面出现的、对本节写的动态数组进行的操作改了。
