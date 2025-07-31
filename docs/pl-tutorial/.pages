@@ -1,8 +1,8 @@
 nav :
     - 00 开始之前 : 00-beforestart.md
     - 01 基础设施建设 : 01-infrastructure.md
-    - 02 从计算器开始——词法分析: 02-lexer.md
-    - 03 从计算器开始——语法分析: 03-parser.md
-    - 04 从计算器开始——执行: 04-executor.md
+    - 02 从计算器开始——词法分析: 02-calc-lexer.md
+    - 03 从计算器开始——语法分析: 03-calc-parser.md
+    - 04 从计算器开始——执行: 04-calc-executor.md
     - 05 目标语言 Siberia : 05-siberia.md
     - 06 添加变量、添加注释 : 06-variable-and-comments.md
