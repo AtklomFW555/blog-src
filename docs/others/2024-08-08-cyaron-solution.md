@@ -2,7 +2,7 @@
 
 PL 系列登神长阶（1/3）
 
-EP2：题解 P11738 未来程序·改（咕咕中）
+EP2：[题解 P11738 未来程序·改](2025-08-04-future-program-modified-solution.md)
 
 EP3：题解 UVA12423 Mua(III) - Full Interpreter（咕咕中）
 
